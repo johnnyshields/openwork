@@ -202,17 +202,19 @@ function ChatPane() {
               expandedStepIds={expandedStepIds()}
               setExpandedStepIds={setExpandedStepIds}
               scrollElement={() => scrollContainerRef}
+              footer={
+                <Show when={p.runPhase() === "sending" || p.runPhase() === "thinking"}>
+                  <div class="flex items-center gap-3">
+                    <div class="w-7 h-7 rounded-full bg-violet-3 border border-violet-6 flex items-center justify-center flex-shrink-0">
+                      <div class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-violet-6 border-t-violet-11" />
+                    </div>
+                    <span class="text-sm text-gray-10">
+                      {p.runPhase() === "sending" ? "Sending\u2026" : "Thinking\u2026"}
+                    </span>
+                  </div>
+                </Show>
+              }
             />
-            <Show when={p.runPhase() === "sending" || p.runPhase() === "thinking"}>
-              <div class="flex items-center gap-3 mt-2">
-                <div class="w-7 h-7 rounded-full bg-violet-3 border border-violet-6 flex items-center justify-center flex-shrink-0">
-                  <div class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-violet-6 border-t-violet-11" />
-                </div>
-                <span class="text-sm text-gray-10">
-                  {p.runPhase() === "sending" ? "Sending\u2026" : "Thinking\u2026"}
-                </span>
-              </div>
-            </Show>
             <div ref={messagesEndRef} />
           </div>
         </div>
