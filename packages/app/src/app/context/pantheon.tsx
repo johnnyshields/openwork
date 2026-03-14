@@ -11,6 +11,7 @@ import {
   createContext,
   createSignal,
   createEffect,
+  createMemo,
   useContext,
   onCleanup,
   type JSX,
@@ -46,6 +47,8 @@ export interface PantheonContextValue {
   activeMessages: () => MessageWithParts[];
   isSending: () => boolean;
   isStreaming: () => boolean;
+  /** "idle" | "sending" | "thinking" | "responding" */
+  runPhase: () => "idle" | "sending" | "thinking" | "responding";
   /** Actions */
   setActiveConversation: (id: string | null) => void;
   createConversation: (opts?: {
@@ -93,6 +96,15 @@ export function PantheonProvider(props: { children: JSX.Element }) {
   const [activeMessages, setActiveMessages] = createSignal<MessageWithParts[]>([]);
   const [isSending, setIsSending] = createSignal(false);
   const [isStreaming, setIsStreaming] = createSignal(false);
+  const [hasReceivedPart, setHasReceivedPart] = createSignal(false);
+  const [hasReceivedText, setHasReceivedText] = createSignal(false);
+
+  const runPhase = createMemo((): "idle" | "sending" | "thinking" | "responding" => {
+    if (!isSending()) return "idle";
+    if (hasReceivedText()) return "responding";
+    if (hasReceivedPart()) return "thinking";
+    return "sending";
+  });
 
   // Tracks accumulated parts for the currently-streaming assistant message.
   // Keyed by message_id, value is the accumulated parts array.
@@ -237,6 +249,12 @@ export function PantheonProvider(props: { children: JSX.Element }) {
 
       streamingMessageId = msgId;
 
+      // Track phase transitions
+      setHasReceivedPart(true);
+      if (event.part?.type === "text" && event.part?.text) {
+        setHasReceivedText(true);
+      }
+
       // Build the streaming assistant message and append/update it in activeMessages
       const streamingMsg: MessageWithParts = {
         info: {
@@ -369,6 +387,8 @@ export function PantheonProvider(props: { children: JSX.Element }) {
 
     setIsSending(true);
     setIsStreaming(true);
+    setHasReceivedPart(false);
+    setHasReceivedText(false);
     streamingParts = new Map();
     streamingMessageId = null;
 
@@ -431,6 +451,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     activeMessages,
     isSending,
     isStreaming,
+    runPhase,
     setActiveConversation: setActiveConversationId,
     createConversation,
     deleteConversation,
