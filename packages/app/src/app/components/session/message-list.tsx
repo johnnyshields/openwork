@@ -24,7 +24,6 @@ export type MessageListProps = {
   scrollElement?: () => HTMLElement | undefined;
   setScrollToMessageById?: (handler: ((messageId: string, behavior?: ScrollBehavior) => boolean) | null) => void;
   loader?: JSX.Element;
-  footer?: JSX.Element;
 };
 
 type StepClusterBlock = {
