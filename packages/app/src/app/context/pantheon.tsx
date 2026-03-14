@@ -53,6 +53,7 @@ export interface PantheonContextValue {
     agent_id?: string;
   }) => Promise<PantheonConversation | null>;
   deleteConversation: (id: string) => Promise<void>;
+  updateConversation: (id: string, updates: { effort?: string }) => Promise<void>;
   sendMessage: (
     content: string,
     onChunk?: (data: { role: string; content: string; done: boolean }) => void,
@@ -344,6 +345,15 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     }
   }
 
+  async function updateConversation(id: string, updates: { effort?: string }) {
+    try {
+      const updated = await client.updateConversation(id, updates);
+      setConversations((prev) => prev.map((c) => (c.id === id ? updated : c)));
+    } catch (e) {
+      console.error("[pantheon] update conversation failed:", e);
+    }
+  }
+
   async function sendMessage(
     content: string,
     onChunk?: (data: { role: string; content: string; done: boolean }) => void,
@@ -424,6 +434,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     setActiveConversation: setActiveConversationId,
     createConversation,
     deleteConversation,
+    updateConversation,
     sendMessage,
     refreshConversations,
     refreshMessages,

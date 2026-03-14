@@ -238,9 +238,54 @@ function ChatPane() {
                 Send
               </button>
             </div>
+            <EffortSelector />
           </div>
         </div>
       </Show>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Effort selector
+// ---------------------------------------------------------------------------
+
+const EFFORT_OPTIONS = [
+  { value: "", label: "Default" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "max", label: "Max" },
+] as const;
+
+function EffortSelector() {
+  const p = usePantheon();
+
+  const activeConv = createMemo(() =>
+    p.conversations().find((c) => c.id === p.activeConversationId()),
+  );
+
+  const currentEffort = createMemo(() => activeConv()?.effort ?? "");
+
+  const handleChange = async (e: Event) => {
+    const value = (e.target as HTMLSelectElement).value;
+    const convId = p.activeConversationId();
+    if (!convId) return;
+    await p.updateConversation(convId, { effort: value || undefined });
+  };
+
+  return (
+    <div class="flex items-center gap-2 mt-2">
+      <label class="text-[10px] text-gray-8">Thinking:</label>
+      <select
+        class="text-[10px] text-gray-10 bg-gray-2 border border-gray-6 rounded px-1.5 py-0.5 focus:outline-none focus:border-gray-8"
+        value={currentEffort()}
+        onChange={handleChange}
+      >
+        <For each={EFFORT_OPTIONS}>
+          {(opt) => <option value={opt.value}>{opt.label}</option>}
+        </For>
+      </select>
     </div>
   );
 }

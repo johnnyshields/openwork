@@ -19,6 +19,7 @@ export interface PantheonConversation {
   id: string;
   title: string;
   model: string | null;
+  effort: string | null;
   agent_id: string | null;
   provider: string;
   system_prompt: string | null;
@@ -159,6 +160,7 @@ export function createPantheonClient(baseUrl: string) {
     agent_id?: string;
     provider?: string;
     model?: string;
+    effort?: string;
   }): Promise<PantheonConversation> {
     return request<PantheonConversation>("/backend/conversations/", {
       method: "POST",
@@ -167,12 +169,23 @@ export function createPantheonClient(baseUrl: string) {
         agent_id: opts.agent_id,
         provider: opts.provider ?? "claude",
         model: opts.model,
+        effort: opts.effort,
       }),
     });
   }
 
   async function getConversation(id: string): Promise<PantheonConversation> {
     return request<PantheonConversation>(`/backend/conversations/${id}`);
+  }
+
+  async function updateConversation(
+    id: string,
+    updates: { title?: string; model?: string; effort?: string; system_prompt?: string },
+  ): Promise<PantheonConversation> {
+    return request<PantheonConversation>(`/backend/conversations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(updates),
+    });
   }
 
   async function deleteConversation(id: string): Promise<void> {
@@ -350,6 +363,7 @@ export function createPantheonClient(baseUrl: string) {
     listConversations,
     createConversation,
     getConversation,
+    updateConversation,
     deleteConversation,
     getMessages,
     sendMessage,
