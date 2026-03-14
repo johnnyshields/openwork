@@ -151,9 +151,11 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
     },
 
     create: async (opts?: any) => {
+      console.log("[pantheon-adapter] session.create", opts);
       const conv = await pantheonClient.createConversation({
         title: opts?.body?.title ?? opts?.title ?? "New conversation",
       });
+      console.log("[pantheon-adapter] session.created", conv.id);
       return wrap(convToSession(conv));
     },
 
@@ -193,6 +195,18 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       const parts = opts?.body?.parts ?? opts?.parts ?? [];
       const textPart = parts.find((p: any) => p.type === "text");
       const text = textPart?.text ?? "";
+      const model = opts?.model?.modelID ?? opts?.body?.model?.modelID ?? undefined;
+
+      console.log("[pantheon-adapter] prompt", { sessionID, text, model, optsKeys: Object.keys(opts ?? {}) });
+
+      if (!sessionID) {
+        console.error("[pantheon-adapter] prompt: no sessionID!", opts);
+        return wrap({});
+      }
+      if (!text) {
+        console.error("[pantheon-adapter] prompt: no text!", { parts });
+        return wrap({});
+      }
 
       // Push responding status before streaming begins
       eventQueue.push({
@@ -203,7 +217,9 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       // Fire-and-forget the streaming call; events flow through eventQueue
       pantheonClient
         .sendMessageStreaming(sessionID, text, undefined, {
+          model,
           onEvent: (evt: PantheonStreamEvent) => {
+            console.log("[pantheon-adapter] stream event", evt.type, evt);
             if (evt.type === "part") {
               const part = {
                 ...(evt as any).part,
@@ -323,24 +339,24 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       name: "Anthropic",
       env: ["ANTHROPIC_API_KEY"],
       models: {
-        "claude-sonnet-4-6-20250827": {
-          id: "claude-sonnet-4-6-20250827",
+        "claude-sonnet-4-6": {
+          id: "claude-sonnet-4-6",
           name: "Claude Sonnet 4.6",
           release_date: "2025-08-27",
           attachment: true, reasoning: true, temperature: true, tool_call: true,
           cost: { input: 3, output: 15 },
           limit: { context: 1000000, output: 64000 },
         },
-        "claude-opus-4-6-20250827": {
-          id: "claude-opus-4-6-20250827",
+        "claude-opus-4-6": {
+          id: "claude-opus-4-6",
           name: "Claude Opus 4.6",
           release_date: "2025-08-27",
           attachment: true, reasoning: true, temperature: true, tool_call: true,
           cost: { input: 15, output: 75 },
           limit: { context: 1000000, output: 32000 },
         },
-        "claude-haiku-4-5-20251001": {
-          id: "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5": {
+          id: "claude-haiku-4-5",
           name: "Claude Haiku 4.5",
           release_date: "2025-10-01",
           attachment: true, reasoning: false, temperature: true, tool_call: true,
@@ -355,7 +371,7 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
     list: () => stub({
       all: pantheonProviders,
       connected: pantheonProviders.map((p) => p.id),
-      default: { anthropic: "claude-sonnet-4-6-20250827" },
+      default: { anthropic: "claude-sonnet-4-6" },
     }),
     auth: () => stub({}),
     oauth: {

@@ -135,6 +135,8 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { createSessionStore } from "./context/session";
 import { createExtensionsStore } from "./context/extensions";
 import { useGlobalSync } from "./context/global-sync";
+import { useGlobalSDK } from "./context/global-sdk";
+import { isPantheonMode } from "./context/pantheon";
 import { createWorkspaceStore } from "./context/workspace";
 import {
   updaterEnvironment,
@@ -2626,6 +2628,20 @@ export default function App() {
     engineRuntime,
     developerMode,
   });
+
+  // In Pantheon mode, set the client from GlobalSDK adapter immediately
+  // (normally the workspace store sets it during connect(), but we skip that)
+  if (isPantheonMode()) {
+    const globalSDK = useGlobalSDK();
+    createEffect(() => {
+      const adapterClient = globalSDK.client();
+      if (adapterClient && !client()) {
+        setClient(adapterClient as any);
+        setConnectedVersion("pantheon");
+        setSseConnected(true);
+      }
+    });
+  }
 
   type SidebarWorkspaceSessionsStatus = WorkspaceSessionGroup["status"];
   const [sidebarSessionsByWorkspaceId, setSidebarSessionsByWorkspaceId] = createSignal<

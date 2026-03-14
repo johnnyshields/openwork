@@ -29,6 +29,10 @@ export default defineConfig({
     port: devPort,
     strictPort: true,
     ...(allowedHosts.size > 0 ? { allowedHosts: Array.from(allowedHosts) } : {}),
+    watch: {
+      usePolling: true,
+      interval: 1000,
+    },
   },
   build: {
     target: "esnext",
