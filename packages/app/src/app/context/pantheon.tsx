@@ -96,14 +96,33 @@ export function PantheonProvider(props: { children: JSX.Element }) {
   const [activeMessages, setActiveMessages] = createSignal<MessageWithParts[]>([]);
   const [isSending, setIsSending] = createSignal(false);
   const [isStreaming, setIsStreaming] = createSignal(false);
-  const [hasReceivedPart, setHasReceivedPart] = createSignal(false);
-  const [hasReceivedText, setHasReceivedText] = createSignal(false);
-  const [sendingConversationId, setSendingConversationId] = createSignal<string | null>(null);
+
+  // Per-conversation run phase tracking
+  type ConvPhase = { sending: boolean; receivedPart: boolean; receivedText: boolean };
+  const [convPhases, setConvPhases] = createSignal<Record<string, ConvPhase>>({});
+
+  function setConvPhase(convId: string, update: Partial<ConvPhase>) {
+    setConvPhases((prev) => ({
+      ...prev,
+      [convId]: { ...(prev[convId] ?? { sending: false, receivedPart: false, receivedText: false }), ...update },
+    }));
+  }
+
+  function clearConvPhase(convId: string) {
+    setConvPhases((prev) => {
+      const next = { ...prev };
+      delete next[convId];
+      return next;
+    });
+  }
 
   const runPhase = createMemo((): "idle" | "sending" | "thinking" | "responding" => {
-    if (!isSending() || sendingConversationId() !== activeConversationId()) return "idle";
-    if (hasReceivedText()) return "responding";
-    if (hasReceivedPart()) return "thinking";
+    const convId = activeConversationId();
+    if (!convId) return "idle";
+    const phase = convPhases()[convId];
+    if (!phase?.sending) return "idle";
+    if (phase.receivedText) return "responding";
+    if (phase.receivedPart) return "thinking";
     return "sending";
   });
 
@@ -250,10 +269,10 @@ export function PantheonProvider(props: { children: JSX.Element }) {
 
       streamingMessageId = msgId;
 
-      // Track phase transitions
-      setHasReceivedPart(true);
+      // Track phase transitions (per-conversation)
+      setConvPhase(conversationId, { receivedPart: true });
       if (event.part?.type === "text" && event.part?.text) {
-        setHasReceivedText(true);
+        setConvPhase(conversationId, { receivedText: true });
       }
 
       // Build the streaming assistant message and append/update it in activeMessages
@@ -388,9 +407,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
 
     setIsSending(true);
     setIsStreaming(true);
-    setHasReceivedPart(false);
-    setHasReceivedText(false);
-    setSendingConversationId(convId);
+    setConvPhase(convId, { sending: true, receivedPart: false, receivedText: false });
     streamingParts = new Map();
     streamingMessageId = null;
 
@@ -427,7 +444,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     } finally {
       setIsSending(false);
       setIsStreaming(false);
-      setSendingConversationId(null);
+      clearConvPhase(convId);
       streamingParts = new Map();
       streamingMessageId = null;
     }
