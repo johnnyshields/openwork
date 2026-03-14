@@ -8,7 +8,8 @@
 
 import { createSignal, createMemo, For, Show, onMount } from "solid-js";
 import { usePantheon } from "./context/pantheon";
-import type { PantheonMessage, PantheonConversation } from "./lib/pantheon-client";
+import type { PantheonConversation } from "./lib/pantheon-client";
+import MessageList from "./components/session/message-list";
 
 // ---------------------------------------------------------------------------
 // Main app
@@ -144,9 +145,10 @@ function Sidebar() {
 function ChatPane() {
   const p = usePantheon();
   const [draft, setDraft] = createSignal("");
-  const [streamingContent, setStreamingContent] = createSignal<string | null>(null);
+  const [expandedStepIds, setExpandedStepIds] = createSignal<Set<string>>(new Set());
   let inputRef: HTMLTextAreaElement | undefined;
   let messagesEndRef: HTMLDivElement | undefined;
+  let scrollContainerRef: HTMLDivElement | undefined;
 
   const messages = createMemo(() => p.activeMessages());
 
@@ -159,18 +161,15 @@ function ChatPane() {
     if (!text || p.isSending()) return;
 
     setDraft("");
-    setStreamingContent("");
 
     await p.sendMessage(text, (chunk) => {
-      if (!chunk.done) {
-        setStreamingContent(chunk.content);
+      if (chunk.done) {
+        scrollToBottom();
       } else {
-        setStreamingContent(null);
+        scrollToBottom();
       }
-      scrollToBottom();
     });
 
-    setStreamingContent(null);
     scrollToBottom();
   };
 
@@ -193,23 +192,17 @@ function ChatPane() {
         fallback={<EmptyState />}
       >
         {/* Messages */}
-        <div class="flex-1 overflow-y-auto px-6 py-8">
-          <div class="max-w-[700px] mx-auto space-y-6">
-            <For each={messages()}>
-              {(msg) => <MessageBubble message={msg} />}
-            </For>
-            <Show when={streamingContent() !== null}>
-              <div class="flex gap-3">
-                <div class="w-7 h-7 rounded-full bg-violet-3 border border-violet-6 flex items-center justify-center text-violet-11 text-xs font-bold flex-shrink-0">
-                  A
-                </div>
-                <div class="flex-1 text-sm text-gray-12 whitespace-pre-wrap leading-relaxed">
-                  {streamingContent() || (
-                    <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-6 border-t-gray-12" />
-                  )}
-                </div>
-              </div>
-            </Show>
+        <div ref={scrollContainerRef} class="flex-1 overflow-y-auto px-6 py-8">
+          <div class="max-w-[700px] mx-auto">
+            <MessageList
+              messages={messages()}
+              isStreaming={p.isStreaming()}
+              developerMode={false}
+              showThinking={false}
+              expandedStepIds={expandedStepIds()}
+              setExpandedStepIds={setExpandedStepIds}
+              scrollElement={() => scrollContainerRef}
+            />
             <div ref={messagesEndRef} />
           </div>
         </div>
@@ -240,31 +233,6 @@ function ChatPane() {
           </div>
         </div>
       </Show>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Message bubble
-// ---------------------------------------------------------------------------
-
-function MessageBubble(props: { message: PantheonMessage }) {
-  const isUser = () => props.message.role === "user";
-
-  return (
-    <div class="flex gap-3">
-      <div
-        class={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-          isUser()
-            ? "bg-gray-3 border border-gray-6 text-gray-11"
-            : "bg-violet-3 border border-violet-6 text-violet-11"
-        }`}
-      >
-        {isUser() ? "U" : "A"}
-      </div>
-      <div class="flex-1 text-sm text-gray-12 whitespace-pre-wrap leading-relaxed">
-        {props.message.content}
-      </div>
     </div>
   );
 }

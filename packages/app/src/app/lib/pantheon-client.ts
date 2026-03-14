@@ -36,7 +36,14 @@ export interface PantheonMessage {
   input_tokens: number;
   output_tokens: number;
   created_at: string;
+  parts?: any[];
 }
+
+export type PantheonStreamEvent =
+  | { type: "part"; message_id: string; part: any }
+  | { type: "message"; id: string; content: string; role: string; model?: string }
+  | { type: "done"; message_id: string }
+  | { type: "error"; error: string };
 
 export interface PantheonAgent {
   id: string;
@@ -208,12 +215,22 @@ export function createPantheonClient(baseUrl: string) {
   /**
    * Send a message via fetch and stream SSE response chunks.
    * Returns the final assistant message content.
+   *
+   * Supports both structured part events and legacy plain-text events:
+   * - `{type:"part", message_id, part}` — structured Part update
+   * - `{type:"message", id, content, role}` — legacy plain text
+   * - `{type:"done", message_id}` — turn complete
+   * - `[DONE]` — SSE stream end
    */
   async function sendMessageStreaming(
     conversationId: string,
     content: string,
     onChunk?: (data: { role: string; content: string; done: boolean }) => void,
-    opts?: { model?: string; signal?: AbortSignal },
+    opts?: {
+      model?: string;
+      signal?: AbortSignal;
+      onEvent?: (event: PantheonStreamEvent) => void;
+    },
   ): Promise<PantheonMessage | null> {
     const url = `${baseUrl}/backend/conversations/${conversationId}/messages`;
     const headers: Record<string, string> = {
@@ -261,17 +278,42 @@ export function createPantheonClient(baseUrl: string) {
             continue;
           }
           try {
-            const parsed = JSON.parse(data);
-            if (parsed.error) {
+            const parsed = JSON.parse(data) as PantheonStreamEvent;
+
+            if (parsed.type === "error") {
               throw new PantheonApiError(0, parsed.error);
             }
-            if (parsed.role === "assistant") {
+
+            if (parsed.type === "part") {
+              opts?.onEvent?.(parsed);
+              // Also fire legacy onChunk for text parts so existing
+              // callers that only listen for onChunk still work.
+              if (parsed.part?.type === "text") {
+                onChunk?.({
+                  role: "assistant",
+                  content: parsed.part.text ?? "",
+                  done: false,
+                });
+              }
+              continue;
+            }
+
+            if (parsed.type === "done") {
+              opts?.onEvent?.(parsed);
+              onChunk?.({ role: "assistant", content: "", done: true });
+              continue;
+            }
+
+            // Legacy plain-text message event (or untyped)
+            if (parsed.type === "message" || (parsed as any).role === "assistant") {
+              const msg = parsed as any;
+              opts?.onEvent?.(parsed);
               lastMessage = {
-                id: parsed.id ?? "",
+                id: msg.id ?? "",
                 conversation_id: conversationId,
                 role: "assistant",
-                content: parsed.content ?? "",
-                model: parsed.model ?? null,
+                content: msg.content ?? "",
+                model: msg.model ?? null,
                 source: "nightshift",
                 input_tokens: 0,
                 output_tokens: 0,
@@ -279,10 +321,14 @@ export function createPantheonClient(baseUrl: string) {
               };
               onChunk?.({
                 role: "assistant",
-                content: parsed.content ?? "",
+                content: msg.content ?? "",
                 done: false,
               });
+              continue;
             }
+
+            // Forward any other typed events
+            opts?.onEvent?.(parsed);
           } catch (e) {
             if (e instanceof PantheonApiError) throw e;
             // Ignore parse errors for SSE ping frames etc.

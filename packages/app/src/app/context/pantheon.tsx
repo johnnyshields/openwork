@@ -22,7 +22,9 @@ import {
   type PantheonConversation,
   type PantheonMessage,
   type PantheonAgent,
+  type PantheonStreamEvent,
 } from "../lib/pantheon-client";
+import type { MessageWithParts, PlaceholderAssistantMessage } from "../types";
 
 // ---------------------------------------------------------------------------
 // Context shape
@@ -41,8 +43,9 @@ export interface PantheonContextValue {
   conversations: () => PantheonConversation[];
   agents: () => PantheonAgent[];
   activeConversationId: () => string | null;
-  activeMessages: () => PantheonMessage[];
+  activeMessages: () => MessageWithParts[];
   isSending: () => boolean;
+  isStreaming: () => boolean;
   /** Actions */
   setActiveConversation: (id: string | null) => void;
   createConversation: (opts?: {
@@ -86,8 +89,14 @@ export function PantheonProvider(props: { children: JSX.Element }) {
   const [conversations, setConversations] = createSignal<PantheonConversation[]>([]);
   const [agents, setAgents] = createSignal<PantheonAgent[]>([]);
   const [activeConversationId, setActiveConversationId] = createSignal<string | null>(null);
-  const [activeMessages, setActiveMessages] = createSignal<PantheonMessage[]>([]);
+  const [activeMessages, setActiveMessages] = createSignal<MessageWithParts[]>([]);
   const [isSending, setIsSending] = createSignal(false);
+  const [isStreaming, setIsStreaming] = createSignal(false);
+
+  // Tracks accumulated parts for the currently-streaming assistant message.
+  // Keyed by message_id, value is the accumulated parts array.
+  let streamingParts: Map<string, any[]> = new Map();
+  let streamingMessageId: string | null = null;
 
   const isLoggedIn = () => !!user();
 
@@ -160,6 +169,116 @@ export function PantheonProvider(props: { children: JSX.Element }) {
 
   // ── Helpers ─────────────────────────────────────────────────────────
 
+  function toMessageWithParts(msg: PantheonMessage): MessageWithParts {
+    const parts: any[] =
+      msg.parts && msg.parts.length > 0
+        ? msg.parts
+        : [
+            {
+              type: "text" as const,
+              id: `${msg.id}-text`,
+              sessionID: msg.conversation_id,
+              messageID: msg.id,
+              text: msg.content,
+            },
+          ];
+
+    const info: PlaceholderAssistantMessage = {
+      id: msg.id,
+      sessionID: msg.conversation_id,
+      role: msg.role as "assistant",
+      time: {
+        created: new Date(msg.created_at).getTime(),
+      },
+      parentID: "",
+      modelID: msg.model ?? "",
+      providerID: msg.source ?? "",
+      mode: "",
+      agent: "",
+      path: { cwd: "", root: "" },
+      cost: 0,
+      tokens: {
+        input: msg.input_tokens,
+        output: msg.output_tokens,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+    };
+
+    // For user messages, override the role in info
+    if (msg.role === "user") {
+      (info as any).role = "user";
+    }
+
+    return { info, parts };
+  }
+
+  function handleStreamEvent(event: PantheonStreamEvent, conversationId: string) {
+    if (event.type === "part") {
+      const msgId = event.message_id;
+      if (!streamingParts.has(msgId)) {
+        streamingParts.set(msgId, []);
+      }
+      const parts = streamingParts.get(msgId)!;
+
+      // Upsert: if a part with same id exists, replace it; otherwise append
+      const partId = event.part?.id;
+      if (partId) {
+        const existingIdx = parts.findIndex((p: any) => p.id === partId);
+        if (existingIdx >= 0) {
+          parts[existingIdx] = event.part;
+        } else {
+          parts.push(event.part);
+        }
+      } else {
+        parts.push(event.part);
+      }
+
+      streamingMessageId = msgId;
+
+      // Build the streaming assistant message and append/update it in activeMessages
+      const streamingMsg: MessageWithParts = {
+        info: {
+          id: msgId,
+          sessionID: conversationId,
+          role: "assistant",
+          time: { created: Date.now() },
+          parentID: "",
+          modelID: "",
+          providerID: "",
+          mode: "",
+          agent: "",
+          path: { cwd: "", root: "" },
+          cost: 0,
+          tokens: {
+            input: 0,
+            output: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+        },
+        parts: [...parts],
+      };
+
+      setActiveMessages((prev) => {
+        // If there's already a message with this id, replace it
+        const idx = prev.findIndex((m) => (m.info as any).id === msgId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = streamingMsg;
+          return next;
+        }
+        // Otherwise append
+        return [...prev, streamingMsg];
+      });
+    }
+
+    if (event.type === "done") {
+      streamingParts.delete(event.message_id);
+      streamingMessageId = null;
+    }
+  }
+
   async function loadConversationsAndAgents() {
     try {
       const [convs, ags] = await Promise.all([
@@ -176,7 +295,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
   async function loadMessages(conversationId: string) {
     try {
       const msgs = await client.getMessages(conversationId);
-      setActiveMessages(msgs);
+      setActiveMessages(msgs.map(toMessageWithParts));
     } catch (e) {
       console.error("[pantheon] failed to load messages:", e);
     }
@@ -239,9 +358,13 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     }
 
     setIsSending(true);
+    setIsStreaming(true);
+    streamingParts = new Map();
+    streamingMessageId = null;
+
     try {
       // Optimistically add user message to the list
-      const userMsg: PantheonMessage = {
+      const userMsg = toMessageWithParts({
         id: `temp-${Date.now()}`,
         conversation_id: convId,
         role: "user",
@@ -251,11 +374,14 @@ export function PantheonProvider(props: { children: JSX.Element }) {
         input_tokens: 0,
         output_tokens: 0,
         created_at: new Date().toISOString(),
-      };
+      });
       setActiveMessages((prev) => [...prev, userMsg]);
 
+      const streamConvId = convId;
       // Send and stream response
-      const result = await client.sendMessageStreaming(convId, content, onChunk);
+      const result = await client.sendMessageStreaming(convId, content, onChunk, {
+        onEvent: (event) => handleStreamEvent(event, streamConvId),
+      });
 
       // Refresh messages to get the real IDs from DB
       await loadMessages(convId);
@@ -268,6 +394,9 @@ export function PantheonProvider(props: { children: JSX.Element }) {
       return null;
     } finally {
       setIsSending(false);
+      setIsStreaming(false);
+      streamingParts = new Map();
+      streamingMessageId = null;
     }
   }
 
@@ -291,6 +420,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     activeConversationId,
     activeMessages,
     isSending,
+    isStreaming,
     setActiveConversation: setActiveConversationId,
     createConversation,
     deleteConversation,
