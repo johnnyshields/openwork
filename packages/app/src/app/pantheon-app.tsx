@@ -198,11 +198,17 @@ function ChatPane() {
               messages={messages()}
               isStreaming={p.isStreaming()}
               developerMode={false}
-              showThinking={false}
+              showThinking={true}
               expandedStepIds={expandedStepIds()}
               setExpandedStepIds={setExpandedStepIds}
               scrollElement={() => scrollContainerRef}
             />
+            <Show when={p.isStreaming() && messages().length > 0 && messages()[messages().length - 1]?.parts.length === 0}>
+              <div class="flex items-center gap-2 py-4 text-sm text-gray-10">
+                <div class="h-4 w-4 animate-spin rounded-full border-2 border-gray-6 border-t-gray-11" />
+                <span>Thinking&hellip;</span>
+              </div>
+            </Show>
             <div ref={messagesEndRef} />
           </div>
         </div>
