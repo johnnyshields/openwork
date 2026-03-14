@@ -1090,6 +1090,7 @@ export default function MessageList(props: MessageListProps) {
         fallback={(
           <div class="space-y-4">
             <For each={messageBlocks()}>{(block, blockIndex) => renderBlock(block, blockIndex())}</For>
+            <Show when={props.footer}>{props.footer}</Show>
           </div>
         )}
       >
@@ -1098,6 +1099,7 @@ export default function MessageList(props: MessageListProps) {
           fallback={(
             <div class="space-y-4">
               <For each={messageBlocks()}>{(block, blockIndex) => renderBlock(block, blockIndex())}</For>
+              <Show when={props.footer}>{props.footer}</Show>
             </div>
           )}
         >
@@ -1131,7 +1133,6 @@ export default function MessageList(props: MessageListProps) {
           </div>
         </Show>
       </Show>
-      <Show when={props.footer}>{props.footer}</Show>
     </div>
   );
 }
