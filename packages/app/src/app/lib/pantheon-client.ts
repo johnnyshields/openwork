@@ -54,6 +54,22 @@ export interface PantheonAgent {
   status: string;
 }
 
+export interface PantheonWorkspace {
+  id: string;
+  name: string;
+  mode: "local" | "remote";
+  status: "creating" | "ready" | "running" | "stopped" | "error";
+  repo_url?: string;
+  repo_branch?: string;
+  local_path?: string;
+  container_id?: string;
+  agent_id?: string;
+  workspace_id?: string;
+  created_at: string;
+  updated_at: string;
+  nightshift_api_key?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -353,6 +369,42 @@ export function createPantheonClient(baseUrl: string) {
     return lastMessage;
   }
 
+  // ── Workspaces ────────────────────────────────────────────────────
+
+  async function listWorkspaces(): Promise<PantheonWorkspace[]> {
+    return request<PantheonWorkspace[]>("/backend/workspaces");
+  }
+
+  async function createWorkspace(data: {
+    name: string;
+    mode: string;
+    local_path?: string;
+    repo_url?: string;
+  }): Promise<PantheonWorkspace> {
+    return request<PantheonWorkspace>("/backend/workspaces", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async function getWorkspace(id: string): Promise<PantheonWorkspace> {
+    return request<PantheonWorkspace>(`/backend/workspaces/${id}`);
+  }
+
+  async function updateWorkspace(
+    id: string,
+    data: Partial<PantheonWorkspace>,
+  ): Promise<PantheonWorkspace> {
+    return request<PantheonWorkspace>(`/backend/workspaces/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async function deleteWorkspace(id: string): Promise<void> {
+    await request(`/backend/workspaces/${id}`, { method: "DELETE" });
+  }
+
   return {
     getToken,
     isLoggedIn,
@@ -368,6 +420,11 @@ export function createPantheonClient(baseUrl: string) {
     getMessages,
     sendMessage,
     sendMessageStreaming,
+    listWorkspaces,
+    createWorkspace,
+    getWorkspace,
+    updateWorkspace,
+    deleteWorkspace,
   };
 }
 

@@ -8,7 +8,8 @@
 
 import { createSignal, createMemo, For, Show, onMount } from "solid-js";
 import { usePantheon } from "./context/pantheon";
-import type { PantheonConversation } from "./lib/pantheon-client";
+import type { PantheonConversation, PantheonWorkspace } from "./lib/pantheon-client";
+import { isTauriRuntime } from "./utils";
 import MessageList from "./components/session/message-list";
 
 // ---------------------------------------------------------------------------
@@ -76,6 +77,7 @@ function LoginError(props: { error: string }) {
 
 function Sidebar() {
   const p = usePantheon();
+  const [showNewWorkspace, setShowNewWorkspace] = createSignal(false);
 
   const sortedConversations = createMemo(() =>
     [...p.conversations()].sort(
@@ -124,6 +126,28 @@ function Sidebar() {
         </For>
       </div>
 
+      {/* Workspaces */}
+      <div class="border-t border-gray-6">
+        <div class="p-2">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] font-medium text-gray-9 uppercase tracking-wider">Workspaces</span>
+            <button
+              type="button"
+              class="text-[10px] text-gray-9 hover:text-gray-11"
+              onClick={() => setShowNewWorkspace(true)}
+            >
+              + New
+            </button>
+          </div>
+          <Show when={p.workspaces().length === 0}>
+            <p class="text-[10px] text-gray-8 px-1">No workspaces yet</p>
+          </Show>
+          <For each={p.workspaces()}>
+            {(ws) => <WorkspaceItem workspace={ws} />}
+          </For>
+        </div>
+      </div>
+
       {/* Footer */}
       <div class="p-2 border-t border-gray-6">
         <button
@@ -134,6 +158,11 @@ function Sidebar() {
           Sign out
         </button>
       </div>
+
+      {/* New workspace modal */}
+      <Show when={showNewWorkspace()}>
+        <NewWorkspaceModal onClose={() => setShowNewWorkspace(false)} />
+      </Show>
     </div>
   );
 }
@@ -290,6 +319,164 @@ function EffortSelector() {
           {(opt) => <option value={opt.value}>{opt.label}</option>}
         </For>
       </select>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Workspace components
+// ---------------------------------------------------------------------------
+
+const WORKSPACE_STATUS_COLORS: Record<string, string> = {
+  running: "bg-green-9",
+  creating: "bg-yellow-9",
+  ready: "bg-blue-9",
+  stopped: "bg-gray-8",
+  error: "bg-red-9",
+};
+
+function WorkspaceStatusBadge(props: { status: string }) {
+  const color = () => WORKSPACE_STATUS_COLORS[props.status] ?? "bg-gray-8";
+  return (
+    <span
+      class={`inline-block h-2 w-2 rounded-full ${color()}`}
+      title={props.status}
+    />
+  );
+}
+
+function WorkspaceItem(props: { workspace: PantheonWorkspace }) {
+  const p = usePantheon();
+
+  return (
+    <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-gray-11 hover:bg-gray-3 group">
+      <WorkspaceStatusBadge status={props.workspace.status} />
+      <span class="truncate flex-1">{props.workspace.name}</span>
+      <button
+        type="button"
+        class="text-[10px] text-gray-8 hover:text-red-10 opacity-0 group-hover:opacity-100 transition-opacity"
+        onClick={() => p.deleteWorkspace(props.workspace.id)}
+        title="Delete workspace"
+      >
+        x
+      </button>
+    </div>
+  );
+}
+
+function NewWorkspaceModal(props: { onClose: () => void }) {
+  const p = usePantheon();
+  const [name, setName] = createSignal("");
+  const [localPath, setLocalPath] = createSignal("");
+  const [repoUrl, setRepoUrl] = createSignal("");
+  const [creating, setCreating] = createSignal(false);
+  const isTauri = isTauriRuntime();
+
+  const handlePickDirectory = async () => {
+    try {
+      const { pickDirectory } = await import("./lib/tauri");
+      const dir = await pickDirectory({ title: "Select project directory" });
+      if (typeof dir === "string") setLocalPath(dir);
+    } catch (e) {
+      console.error("[workspace] directory picker failed:", e);
+    }
+  };
+
+  const handleCreate = async () => {
+    const wsName = name().trim();
+    if (!wsName || creating()) return;
+
+    setCreating(true);
+    try {
+      const mode = isTauri && localPath() ? "local" : "remote";
+      const ws = await p.createWorkspace({
+        name: wsName,
+        mode,
+        local_path: localPath() || undefined,
+        repo_url: repoUrl() || undefined,
+      });
+
+      // If Tauri + local mode, spin up the sandbox container
+      if (ws && isTauri && mode === "local" && ws.nightshift_api_key) {
+        try {
+          const { sandboxCreateWorkspace } = await import("./lib/tauri");
+          const pantheonUrl = (import.meta.env?.VITE_OPENWORK_URL as string) ?? "";
+          await sandboxCreateWorkspace(localPath(), pantheonUrl, ws.nightshift_api_key);
+          // Refresh to get updated status
+          await p.refreshWorkspaces();
+        } catch (e) {
+          console.error("[workspace] sandbox creation failed:", e);
+        }
+      }
+
+      props.onClose();
+    } catch (e) {
+      console.error("[workspace] creation failed:", e);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div class="w-96 rounded-xl border border-gray-6 bg-gray-2 p-5 shadow-xl">
+        <h3 class="text-sm font-semibold text-gray-12 mb-4">New Workspace</h3>
+
+        <label class="block text-xs text-gray-10 mb-1">Name</label>
+        <input
+          class="w-full rounded-lg border border-gray-6 bg-gray-3 px-3 py-2 text-sm text-gray-12 placeholder-gray-8 focus:border-gray-8 focus:outline-none mb-3"
+          placeholder="my-project"
+          value={name()}
+          onInput={(e) => setName(e.currentTarget.value)}
+        />
+
+        <Show when={isTauri}>
+          <label class="block text-xs text-gray-10 mb-1">Project directory</label>
+          <div class="flex gap-2 mb-3">
+            <input
+              class="flex-1 rounded-lg border border-gray-6 bg-gray-3 px-3 py-2 text-sm text-gray-12 placeholder-gray-8 focus:border-gray-8 focus:outline-none"
+              placeholder="/path/to/project"
+              value={localPath()}
+              onInput={(e) => setLocalPath(e.currentTarget.value)}
+            />
+            <button
+              type="button"
+              class="rounded-lg border border-gray-6 px-3 py-2 text-xs text-gray-11 hover:bg-gray-3"
+              onClick={handlePickDirectory}
+            >
+              Browse
+            </button>
+          </div>
+        </Show>
+
+        <Show when={!isTauri}>
+          <label class="block text-xs text-gray-10 mb-1">Repository URL</label>
+          <input
+            class="w-full rounded-lg border border-gray-6 bg-gray-3 px-3 py-2 text-sm text-gray-12 placeholder-gray-8 focus:border-gray-8 focus:outline-none mb-3"
+            placeholder="https://github.com/user/repo"
+            value={repoUrl()}
+            onInput={(e) => setRepoUrl(e.currentTarget.value)}
+          />
+        </Show>
+
+        <div class="flex justify-end gap-2 mt-4">
+          <button
+            type="button"
+            class="rounded-lg px-4 py-2 text-xs text-gray-11 hover:bg-gray-3"
+            onClick={props.onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-gray-12 px-4 py-2 text-xs font-medium text-gray-1 hover:bg-gray-11 disabled:opacity-50"
+            onClick={handleCreate}
+            disabled={!name().trim() || creating()}
+          >
+            {creating() ? "Creating..." : "Create"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

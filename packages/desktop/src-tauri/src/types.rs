@@ -384,3 +384,10 @@ impl Default for WorkspaceState {
 }
 
 pub const WORKSPACE_STATE_VERSION: u8 = 4;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxWorkspaceResult {
+    pub container_name: String,
+    pub status: String,
+}

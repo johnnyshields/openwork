@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::orchestrator::manager::OrchestratorManager;
 use crate::orchestrator::{resolve_orchestrator_data_dir, resolve_orchestrator_status};
 use crate::platform::configure_hidden;
-use crate::types::{ExecResult, OrchestratorStatus, OrchestratorWorkspace};
+use crate::types::{ExecResult, OrchestratorStatus, OrchestratorWorkspace, SandboxWorkspaceResult};
 
 const SANDBOX_PROGRESS_EVENT: &str = "openwork://sandbox-create-progress";
 
@@ -479,6 +479,7 @@ fn derive_orchestrator_container_name(run_id: &str) -> String {
 
 fn is_openwork_managed_container(name: &str) -> bool {
     name.starts_with("openwork-orchestrator-")
+        || name.starts_with("openwork-workspace-")
         || name.starts_with("openwork-dev-")
         || name.starts_with("openwrk-")
 }
@@ -1463,6 +1464,232 @@ pub fn sandbox_debug_probe(app: AppHandle) -> SandboxDebugProbeResult {
         },
         error,
     }
+}
+
+fn derive_workspace_container_name(workspace_path: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    workspace_path.hash(&mut hasher);
+    let hash = hasher.finish();
+    let hex = format!("{:016x}", hash);
+    format!("openwork-workspace-{}", &hex[..8])
+}
+
+fn is_valid_container_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '-')
+}
+
+#[tauri::command]
+pub fn sandbox_create_workspace(
+    app: AppHandle,
+    workspace_path: String,
+    pantheon_url: String,
+    nightshift_api_key: String,
+    image: Option<String>,
+) -> Result<SandboxWorkspaceResult, String> {
+    let workspace_path = workspace_path.trim().to_string();
+    if workspace_path.is_empty() {
+        return Err("workspace_path is required".to_string());
+    }
+    let pantheon_url = pantheon_url.trim().to_string();
+    if pantheon_url.is_empty() {
+        return Err("pantheon_url is required".to_string());
+    }
+    let nightshift_api_key = nightshift_api_key.trim().to_string();
+    if nightshift_api_key.is_empty() {
+        return Err("nightshift_api_key is required".to_string());
+    }
+
+    let container_name = derive_workspace_container_name(&workspace_path);
+    let image = image
+        .map(|i| i.trim().to_string())
+        .filter(|i| !i.is_empty())
+        .unwrap_or_else(|| "openwork/workspace:latest".to_string());
+
+    let run_id = format!("ws-{}", Uuid::new_v4());
+
+    emit_sandbox_progress(
+        &app,
+        &run_id,
+        "init",
+        "Creating workspace container...",
+        json!({
+            "workspacePath": workspace_path,
+            "containerName": container_name,
+            "image": image,
+        }),
+    );
+
+    // Remove any existing container with the same name (best effort)
+    let _ = run_docker_command(&["rm", "-f", &container_name], Duration::from_secs(10));
+
+    emit_sandbox_progress(
+        &app,
+        &run_id,
+        "docker.run",
+        "Starting workspace container...",
+        json!({
+            "containerName": container_name,
+            "image": image,
+        }),
+    );
+
+    let volume_mount = format!("{}:/workspace", workspace_path);
+    let env_fleet = "PXYCRAB_FLEET_MODE=true";
+    let env_pantheon = format!("PXYCRAB_FLEET_PANTHEON_URL={}", pantheon_url);
+    let env_api_key = format!("PXYCRAB_FLEET_PANTHEON_API_KEY={}", nightshift_api_key);
+
+    let (status, stdout, stderr) = run_docker_command(
+        &[
+            "run",
+            "-d",
+            "--name",
+            &container_name,
+            "-v",
+            &volume_mount,
+            "-e",
+            env_fleet,
+            "-e",
+            &env_pantheon,
+            "-e",
+            &env_api_key,
+            "--network",
+            "openwork-net",
+            &image,
+        ],
+        Duration::from_secs(60),
+    )?;
+
+    if status != 0 {
+        let detail = format!("{}\n{}", stdout.trim(), stderr.trim())
+            .trim()
+            .to_string();
+        emit_sandbox_progress(
+            &app,
+            &run_id,
+            "docker.run.error",
+            "Failed to start workspace container.",
+            json!({
+                "status": status,
+                "detail": detail,
+            }),
+        );
+        return Err(format!(
+            "docker run failed (status {status}): {detail}"
+        ));
+    }
+
+    emit_sandbox_progress(
+        &app,
+        &run_id,
+        "docker.health",
+        "Container started. Polling for health...",
+        json!({
+            "containerName": container_name,
+        }),
+    );
+
+    // Poll container status for up to 30 seconds
+    let poll_start = Instant::now();
+    let poll_timeout = Duration::from_secs(30);
+    let poll_interval = Duration::from_millis(1500);
+    let mut final_status = "created".to_string();
+
+    while poll_start.elapsed() < poll_timeout {
+        std::thread::sleep(poll_interval);
+        match docker_container_state(&container_name) {
+            Ok(Some(state)) => {
+                final_status = state.clone();
+                emit_sandbox_progress(
+                    &app,
+                    &run_id,
+                    "docker.container",
+                    &format!("Workspace container: {state}"),
+                    json!({
+                        "containerName": container_name,
+                        "containerState": state,
+                        "elapsedMs": poll_start.elapsed().as_millis() as u64,
+                    }),
+                );
+                if state == "running" {
+                    break;
+                }
+                if state == "exited" || state == "dead" {
+                    return Err(format!(
+                        "Workspace container exited unexpectedly (state: {state})"
+                    ));
+                }
+            }
+            Ok(None) => {
+                return Err("Workspace container disappeared after creation".to_string());
+            }
+            Err(err) => {
+                eprintln!(
+                    "[workspace-create][runId={run_id}] docker inspect error: {err}"
+                );
+            }
+        }
+    }
+
+    emit_sandbox_progress(
+        &app,
+        &run_id,
+        "done",
+        "Workspace container ready.",
+        json!({
+            "containerName": container_name,
+            "status": final_status,
+        }),
+    );
+
+    Ok(SandboxWorkspaceResult {
+        container_name,
+        status: final_status,
+    })
+}
+
+#[tauri::command]
+pub fn sandbox_workspace_status(container_name: String) -> Result<String, String> {
+    let name = container_name.trim().to_string();
+    if !is_valid_container_name(&name) {
+        return Err("container_name is required and must contain only alphanumeric, '_', '.', or '-' characters".to_string());
+    }
+    match docker_container_state(&name)? {
+        Some(state) => Ok(state),
+        None => Ok("not-found".to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn sandbox_workspace_logs(container_name: String, tail: u32) -> Result<String, String> {
+    let name = container_name.trim().to_string();
+    if !is_valid_container_name(&name) {
+        return Err("container_name is required and must contain only alphanumeric, '_', '.', or '-' characters".to_string());
+    }
+    let tail_str = tail.to_string();
+    let (status, stdout, stderr) = run_docker_command(
+        &["logs", "--tail", &tail_str, &name],
+        Duration::from_secs(10),
+    )?;
+    if status != 0 {
+        let detail = format!("{}\n{}", stdout.trim(), stderr.trim())
+            .trim()
+            .to_string();
+        return Err(format!("docker logs failed (status {status}): {detail}"));
+    }
+    // Docker logs writes stdout and stderr separately; combine them
+    let combined = if stderr.trim().is_empty() {
+        stdout
+    } else if stdout.trim().is_empty() {
+        stderr
+    } else {
+        format!("{stdout}{stderr}")
+    };
+    Ok(combined)
 }
 
 #[cfg(test)]

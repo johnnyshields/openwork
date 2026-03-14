@@ -448,6 +448,33 @@ export type SandboxDoctorResult = {
   } | null;
 };
 
+export type SandboxWorkspaceResult = {
+  container_name: string;
+  status: string;
+};
+
+export async function sandboxCreateWorkspace(
+  workspacePath: string,
+  pantheonUrl: string,
+  nightshiftApiKey: string,
+  image?: string,
+): Promise<SandboxWorkspaceResult> {
+  return invoke<SandboxWorkspaceResult>("sandbox_create_workspace", {
+    workspacePath,
+    pantheonUrl,
+    nightshiftApiKey,
+    image: image ?? null,
+  });
+}
+
+export async function sandboxWorkspaceStatus(containerName: string): Promise<string> {
+  return invoke<string>("sandbox_workspace_status", { containerName });
+}
+
+export async function sandboxWorkspaceLogs(containerName: string, tail: number): Promise<string> {
+  return invoke<string>("sandbox_workspace_logs", { containerName, tail });
+}
+
 export async function sandboxDoctor(): Promise<SandboxDoctorResult> {
   return invoke<SandboxDoctorResult>("sandbox_doctor");
 }

@@ -23,6 +23,7 @@ import {
   type PantheonConversation,
   type PantheonMessage,
   type PantheonAgent,
+  type PantheonWorkspace,
   type PantheonStreamEvent,
 } from "../lib/pantheon-client";
 import type { MessageWithParts, PlaceholderAssistantMessage } from "../types";
@@ -64,6 +65,16 @@ export interface PantheonContextValue {
   refreshConversations: () => Promise<void>;
   refreshMessages: () => Promise<void>;
   logout: () => void;
+  /** Workspace support */
+  workspaces: () => PantheonWorkspace[];
+  createWorkspace: (data: {
+    name: string;
+    mode: string;
+    local_path?: string;
+    repo_url?: string;
+  }) => Promise<PantheonWorkspace | null>;
+  deleteWorkspace: (id: string) => Promise<void>;
+  refreshWorkspaces: () => Promise<void>;
 }
 
 const PantheonContext = createContext<PantheonContextValue>();
@@ -92,6 +103,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
   const [loginError, setLoginError] = createSignal<string | null>(null);
   const [conversations, setConversations] = createSignal<PantheonConversation[]>([]);
   const [agents, setAgents] = createSignal<PantheonAgent[]>([]);
+  const [workspaces, setWorkspaces] = createSignal<PantheonWorkspace[]>([]);
   const [activeConversationId, setActiveConversationId] = createSignal<string | null>(null);
   const [activeMessages, setActiveMessages] = createSignal<MessageWithParts[]>([]);
   const [isSending, setIsSending] = createSignal(false);
@@ -320,12 +332,14 @@ export function PantheonProvider(props: { children: JSX.Element }) {
 
   async function loadConversationsAndAgents() {
     try {
-      const [convs, ags] = await Promise.all([
+      const [convs, ags, ws] = await Promise.all([
         client.listConversations(),
         client.listAgents(),
+        client.listWorkspaces().catch(() => [] as PantheonWorkspace[]),
       ]);
       setConversations(convs);
       setAgents(ags);
+      setWorkspaces(ws);
     } catch (e) {
       console.error("[pantheon] failed to load data:", e);
     }
@@ -450,10 +464,45 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     }
   }
 
+  async function createWorkspaceAction(data: {
+    name: string;
+    mode: string;
+    local_path?: string;
+    repo_url?: string;
+  }): Promise<PantheonWorkspace | null> {
+    try {
+      const ws = await client.createWorkspace(data);
+      setWorkspaces((prev) => [...prev, ws]);
+      return ws;
+    } catch (e) {
+      console.error("[pantheon] create workspace failed:", e);
+      return null;
+    }
+  }
+
+  async function deleteWorkspaceAction(id: string) {
+    try {
+      await client.deleteWorkspace(id);
+      setWorkspaces((prev) => prev.filter((w) => w.id !== id));
+    } catch (e) {
+      console.error("[pantheon] delete workspace failed:", e);
+    }
+  }
+
+  async function refreshWorkspaces() {
+    try {
+      const ws = await client.listWorkspaces();
+      setWorkspaces(ws);
+    } catch (e) {
+      console.error("[pantheon] failed to refresh workspaces:", e);
+    }
+  }
+
   function logout() {
     client.clearToken();
     setUser(null);
     setConversations([]);
+    setWorkspaces([]);
     setActiveMessages([]);
     setActiveConversationId(null);
   }
@@ -480,6 +529,10 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     refreshConversations,
     refreshMessages,
     logout,
+    workspaces,
+    createWorkspace: createWorkspaceAction,
+    deleteWorkspace: deleteWorkspaceAction,
+    refreshWorkspaces,
   };
 
   return (
