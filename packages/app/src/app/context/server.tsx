@@ -26,7 +26,7 @@ type ServerContextValue = {
   remove: (url: string) => void;
 };
 
-const ServerContext = createContext<ServerContextValue | undefined>(undefined);
+export const ServerContext = createContext<ServerContextValue | undefined>(undefined);
 
 export function ServerProvider(props: ParentProps & { defaultUrl: string }) {
   const [list, setList] = createSignal<string[]>([]);

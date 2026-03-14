@@ -1,19 +1,21 @@
 import App from "./app";
-import { PantheonApp } from "./pantheon-app";
 import { GlobalSDKProvider } from "./context/global-sdk";
 import { GlobalSyncProvider } from "./context/global-sync";
 import { LocalProvider } from "./context/local";
 import { ServerProvider } from "./context/server";
-import { PantheonProvider, isPantheonMode } from "./context/pantheon";
+import { isPantheonMode } from "./context/pantheon";
+import { PantheonSDKProvider } from "./context/pantheon-sdk";
 import { isTauriRuntime } from "./utils";
 
 export default function AppEntry() {
-  // Pantheon mode: skip the OpenCode SDK stack entirely
+  // Pantheon mode: full OpenWork UI backed by Pantheon API
   if (isPantheonMode()) {
     return (
-      <PantheonProvider>
-        <PantheonApp />
-      </PantheonProvider>
+      <PantheonSDKProvider>
+        <LocalProvider>
+          <App />
+        </LocalProvider>
+      </PantheonSDKProvider>
     );
   }
 
