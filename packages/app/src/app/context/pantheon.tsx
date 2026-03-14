@@ -98,9 +98,10 @@ export function PantheonProvider(props: { children: JSX.Element }) {
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [hasReceivedPart, setHasReceivedPart] = createSignal(false);
   const [hasReceivedText, setHasReceivedText] = createSignal(false);
+  const [sendingConversationId, setSendingConversationId] = createSignal<string | null>(null);
 
   const runPhase = createMemo((): "idle" | "sending" | "thinking" | "responding" => {
-    if (!isSending()) return "idle";
+    if (!isSending() || sendingConversationId() !== activeConversationId()) return "idle";
     if (hasReceivedText()) return "responding";
     if (hasReceivedPart()) return "thinking";
     return "sending";
@@ -389,6 +390,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     setIsStreaming(true);
     setHasReceivedPart(false);
     setHasReceivedText(false);
+    setSendingConversationId(convId);
     streamingParts = new Map();
     streamingMessageId = null;
 
@@ -425,6 +427,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     } finally {
       setIsSending(false);
       setIsStreaming(false);
+      setSendingConversationId(null);
       streamingParts = new Map();
       streamingMessageId = null;
     }
