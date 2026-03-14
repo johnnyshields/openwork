@@ -11,6 +11,7 @@ import type {
   WorkspaceConnectionState,
   EngineRuntime,
 } from "../types";
+import { isPantheonMode } from "./pantheon";
 import {
   addOpencodeCacheHint,
   clearStartupPreference,
@@ -3164,7 +3165,24 @@ export function createWorkspaceStore(options: {
       ? import.meta.env.VITE_OPENWORK_URL.trim()
       : "";
 
-  if (remoteUrlFromEnv && !isTauriRuntime()) {
+  if (isPantheonMode()) {
+    // In Pantheon mode, Pantheon IS the backend — register it as a workspace
+    // so the UI skips the "set up your workspace" empty state.
+    const pantheonWorkspace: WorkspaceInfo = {
+      id: "pantheon",
+      name: "Pantheon",
+      path: "",
+      preset: "default",
+      workspaceType: "remote",
+      remoteType: "openwork",
+      baseUrl: remoteUrlFromEnv || null,
+      openworkHostUrl: remoteUrlFromEnv || null,
+      displayName: "Pantheon",
+    };
+    setWorkspaces([pantheonWorkspace]);
+    syncActiveWorkspaceId("pantheon");
+    updateWorkspaceConnectionState("pantheon", { status: "connected", message: null });
+  } else if (remoteUrlFromEnv && !isTauriRuntime()) {
     let autoConnectFired = false;
     createEffect(() => {
       const ws = workspaces();
