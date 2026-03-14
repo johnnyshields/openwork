@@ -34,6 +34,20 @@ const PANTHEON_BASE_URL =
     ? import.meta.env.VITE_OPENWORK_URL.trim()
     : "";
 
+function generateCodeVerifier(): string {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return btoa(String.fromCharCode(...array))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function generateCodeChallenge(verifier: string): Promise<string> {
+  const data = new TextEncoder().encode(verifier);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return btoa(String.fromCharCode(...new Uint8Array(hash)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 export function PantheonSDKProvider(props: ParentProps) {
   const [healthy, setHealthy] = createSignal<boolean | undefined>(undefined);
   const [loginState, setLoginState] = createSignal<"pending" | "ok" | "error">("pending");
@@ -48,17 +62,21 @@ export function PantheonSDKProvider(props: ParentProps) {
   );
 
   // OIDC login flow
+  let loginInFlight = false;
   createEffect(() => {
     if (loginState() !== "pending") return;
 
     (async () => {
+      if (loginInFlight) return;
+      loginInFlight = true;
+
       try {
         // Step 1: Check if we're on the auth callback with a code
         const url = new URL(window.location.href);
         const code = url.searchParams.get("code");
         const returnedState = url.searchParams.get("state");
 
-        if (code && url.pathname === "/auth/callback") {
+        if (code && returnedState && url.pathname === "/auth/callback") {
           // Validate state to prevent CSRF
           const savedState = sessionStorage.getItem("pantheon.oidc.state");
           if (!savedState || savedState !== returnedState) {
@@ -67,7 +85,19 @@ export function PantheonSDKProvider(props: ParentProps) {
           sessionStorage.removeItem("pantheon.oidc.state");
 
           const redirectUri = `${window.location.origin}/auth/callback`;
-          await client.exchangeCode(code, redirectUri);
+          const codeVerifier = sessionStorage.getItem("pantheon.oidc.code_verifier") || "";
+          const result = await client.exchangeCode(code, redirectUri, codeVerifier);
+          sessionStorage.removeItem("pantheon.oidc.code_verifier");
+
+          // Validate nonce in id_token
+          const savedNonce = sessionStorage.getItem("pantheon.oidc.nonce");
+          if (savedNonce && result.id_token) {
+            const payload = JSON.parse(atob(result.id_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+            if (payload.nonce !== savedNonce) {
+              throw new Error("Invalid nonce in ID token — possible replay attack");
+            }
+          }
+          sessionStorage.removeItem("pantheon.oidc.nonce");
 
           // Clean the URL
           window.history.replaceState({}, "", "/");
@@ -87,9 +117,18 @@ export function PantheonSDKProvider(props: ParentProps) {
 
         // Step 3: If not authenticated, redirect to Pantheon authorize endpoint
         if (!authenticated) {
+          if (!PANTHEON_BASE_URL) {
+            throw new Error("VITE_OPENWORK_URL not configured — cannot redirect to Pantheon login");
+          }
+
           const state = crypto.randomUUID();
           const nonce = crypto.randomUUID();
           sessionStorage.setItem("pantheon.oidc.state", state);
+          sessionStorage.setItem("pantheon.oidc.nonce", nonce);
+
+          const codeVerifier = generateCodeVerifier();
+          const codeChallenge = await generateCodeChallenge(codeVerifier);
+          sessionStorage.setItem("pantheon.oidc.code_verifier", codeVerifier);
 
           const redirectUri = `${window.location.origin}/auth/callback`;
           const params = new URLSearchParams({
@@ -99,6 +138,8 @@ export function PantheonSDKProvider(props: ParentProps) {
             scope: "openid profile email",
             state,
             nonce,
+            code_challenge: codeChallenge,
+            code_challenge_method: "S256",
           });
 
           window.location.href = `${PANTHEON_BASE_URL}/oauth/authorize?${params}`;
@@ -110,6 +151,7 @@ export function PantheonSDKProvider(props: ParentProps) {
         setHealthy(true);
         setLoginState("ok");
       } catch (e) {
+        loginInFlight = false;
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[pantheon-sdk] login failed:", msg);
         setLoginError(msg);

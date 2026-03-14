@@ -158,6 +158,7 @@ export function createPantheonClient(baseUrl: string) {
   async function exchangeCode(
     code: string,
     redirectUri: string,
+    codeVerifier?: string,
   ): Promise<{ access_token: string; id_token: string; expires_in: number }> {
     const body = new URLSearchParams({
       grant_type: "authorization_code",
@@ -166,6 +167,9 @@ export function createPantheonClient(baseUrl: string) {
       client_id: "openwork",
       client_secret: "",
     });
+    if (codeVerifier) {
+      body.set("code_verifier", codeVerifier);
+    }
 
     const resp = await fetch(`${baseUrl}/oauth/token`, {
       method: "POST",
@@ -173,6 +177,10 @@ export function createPantheonClient(baseUrl: string) {
       body: body.toString(),
     });
 
+    if (resp.status === 401 || resp.status === 403) {
+      clearToken();
+      throw new PantheonAuthError(resp.status, "Authentication failed");
+    }
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       throw new PantheonApiError(resp.status, text || resp.statusText);
