@@ -316,8 +316,47 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
     providers: () => stub({}),
   };
 
+  // ── Models available through Pantheon proxy ────────────────────────
+  const pantheonProviders = [
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      env: ["ANTHROPIC_API_KEY"],
+      models: {
+        "claude-sonnet-4-6-20250827": {
+          id: "claude-sonnet-4-6-20250827",
+          name: "Claude Sonnet 4.6",
+          release_date: "2025-08-27",
+          attachment: true, reasoning: true, temperature: true, tool_call: true,
+          cost: { input: 3, output: 15 },
+          limit: { context: 1000000, output: 64000 },
+        },
+        "claude-opus-4-6-20250827": {
+          id: "claude-opus-4-6-20250827",
+          name: "Claude Opus 4.6",
+          release_date: "2025-08-27",
+          attachment: true, reasoning: true, temperature: true, tool_call: true,
+          cost: { input: 15, output: 75 },
+          limit: { context: 1000000, output: 32000 },
+        },
+        "claude-haiku-4-5-20251001": {
+          id: "claude-haiku-4-5-20251001",
+          name: "Claude Haiku 4.5",
+          release_date: "2025-10-01",
+          attachment: true, reasoning: false, temperature: true, tool_call: true,
+          cost: { input: 0.8, output: 4 },
+          limit: { context: 200000, output: 8192 },
+        },
+      },
+    },
+  ];
+
   const provider = {
-    list: () => stub({ all: [], connected: [], default: {} }),
+    list: () => stub({
+      all: pantheonProviders,
+      connected: pantheonProviders.map((p) => p.id),
+      default: { anthropic: "claude-sonnet-4-6-20250827" },
+    }),
     auth: () => stub({}),
     oauth: {
       authorize: () => stub({}),

@@ -139,9 +139,18 @@ export function PantheonSDKProvider(props: ParentProps) {
 
   const refreshDirectory = async (_directory: string) => {};
 
-  // Mark ready once login succeeds
+  // Populate provider data and mark ready once login succeeds
   createEffect(() => {
     if (loginState() === "ok") {
+      // Load provider list from adapter to populate model picker
+      const c = adapterClient();
+      if (c) {
+        (c as any).provider.list().then((result: any) => {
+          if (result?.data) {
+            setGlobalStore("provider", result.data);
+          }
+        });
+      }
       setGlobalStore("ready", true);
     }
   });
