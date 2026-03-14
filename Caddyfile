@@ -1,0 +1,15 @@
+{$DOMAIN:localhost} {
+    # n8n UI and webhooks
+    handle /n8n/* {
+        uri strip_prefix /n8n
+        reverse_proxy n8n:5678
+    }
+    handle /webhook/* {
+        reverse_proxy n8n:5678
+    }
+
+    # Everything else -> Pantheon
+    handle {
+        reverse_proxy pantheon:8080
+    }
+}

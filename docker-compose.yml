@@ -1,0 +1,78 @@
+services:
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  pantheon:
+    build:
+      context: ../pantheon
+    ports:
+      - "8080:8080"
+    environment:
+      PANTHEON_MONGODB_URL: mongodb://mongo:27017
+      PANTHEON_JWT_SECRET: ${JWT_SECRET}
+      PANTHEON_SLACK_WORKSPACE_CONFIG_TOKEN: ${SLACK_CONFIG_TOKEN:-}
+      PANTHEON_SLACK_WORKSPACE_REFRESH_TOKEN: ${SLACK_REFRESH_TOKEN:-}
+      PANTHEON_OPENWORK_APP_DIR: /app/openwork-dist
+      PANTHEON_WORKER_IMAGE: openwork-worker
+      PANTHEON_WORKER_NETWORK: openwork-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - openwork_dist:/app/openwork-dist
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  pxycrab:
+    build:
+      context: ../pxycrab
+    environment:
+      PXYCRAB_FLEET_MODE: "true"
+      PXYCRAB_FLEET_PANTHEON_URL: http://pantheon:8080
+      PXYCRAB_FLEET_PANTHEON_API_KEY: ${PANTHEON_ADMIN_KEY}
+    volumes:
+      - pxycrab_data:/root/.pxycrab
+    depends_on:
+      - pantheon
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:-changeme}
+      WEBHOOK_URL: https://${DOMAIN:-localhost}/webhook/
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - pantheon
+      - n8n
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+  n8n_data:
+  pxycrab_data:
+  openwork_dist:
+  caddy_data:
+  caddy_config:
+
+networks:
+  default:
+    name: openwork-net
