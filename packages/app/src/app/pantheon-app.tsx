@@ -203,7 +203,7 @@ function ChatPane() {
               setExpandedStepIds={setExpandedStepIds}
               scrollElement={() => scrollContainerRef}
             />
-            <Show when={p.isSending() && (!messages().length || (messages()[messages().length - 1]?.info as any)?.role !== "assistant")}>
+            <Show when={p.isSending()}>
               <div class="flex items-center gap-3 py-4">
                 <div class="w-7 h-7 rounded-full bg-violet-3 border border-violet-6 flex items-center justify-center flex-shrink-0">
                   <div class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-violet-6 border-t-violet-11" />
