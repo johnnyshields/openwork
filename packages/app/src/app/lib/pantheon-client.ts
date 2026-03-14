@@ -155,6 +155,34 @@ export function createPantheonClient(baseUrl: string) {
     return request<PantheonUser>("/backend/me");
   }
 
+  async function exchangeCode(
+    code: string,
+    redirectUri: string,
+  ): Promise<{ access_token: string; id_token: string; expires_in: number }> {
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: "openwork",
+      client_secret: "",
+    });
+
+    const resp = await fetch(`${baseUrl}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new PantheonApiError(resp.status, text || resp.statusText);
+    }
+
+    const data = await resp.json();
+    saveToken(data.access_token);
+    return data;
+  }
+
   function isLoggedIn(): boolean {
     return !!token;
   }
@@ -309,8 +337,9 @@ export function createPantheonClient(baseUrl: string) {
           try {
             const parsed = JSON.parse(data) as PantheonStreamEvent;
 
-            if (parsed.type === "error") {
-              throw new PantheonApiError(0, parsed.error);
+            if (parsed.type === "error" || (!parsed.type && (parsed as any).error)) {
+              const errMsg = parsed.error ?? (parsed as any).error;
+              throw new PantheonApiError(0, errMsg);
             }
 
             if (parsed.type === "part") {
@@ -409,6 +438,7 @@ export function createPantheonClient(baseUrl: string) {
     getToken,
     isLoggedIn,
     loginLocalhost,
+    exchangeCode,
     me,
     clearToken,
     listAgents,

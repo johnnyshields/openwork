@@ -47,16 +47,62 @@ export function PantheonSDKProvider(props: ParentProps) {
     createOpencodeClient({ baseUrl: "about:blank" }),
   );
 
-  // Auto-login on mount
+  // OIDC login flow
   createEffect(() => {
     if (loginState() !== "pending") return;
 
     (async () => {
       try {
+        // Step 1: Check if we're on the auth callback with a code
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get("code");
+        const returnedState = url.searchParams.get("state");
+
+        if (code && url.pathname === "/auth/callback") {
+          // Validate state to prevent CSRF
+          const savedState = sessionStorage.getItem("pantheon.oidc.state");
+          if (!savedState || savedState !== returnedState) {
+            throw new Error("Invalid OIDC state parameter — possible CSRF attack");
+          }
+          sessionStorage.removeItem("pantheon.oidc.state");
+
+          const redirectUri = `${window.location.origin}/auth/callback`;
+          await client.exchangeCode(code, redirectUri);
+
+          // Clean the URL
+          window.history.replaceState({}, "", "/");
+        }
+
+        // Step 2: Check if we have a valid token
+        let authenticated = false;
         if (client.isLoggedIn()) {
-          await client.me();
-        } else {
-          await client.loginLocalhost();
+          try {
+            await client.me();
+            authenticated = true;
+          } catch {
+            console.log("[pantheon-sdk] stored token invalid, redirecting to login");
+            client.clearToken();
+          }
+        }
+
+        // Step 3: If not authenticated, redirect to Pantheon authorize endpoint
+        if (!authenticated) {
+          const state = crypto.randomUUID();
+          const nonce = crypto.randomUUID();
+          sessionStorage.setItem("pantheon.oidc.state", state);
+
+          const redirectUri = `${window.location.origin}/auth/callback`;
+          const params = new URLSearchParams({
+            client_id: "openwork",
+            redirect_uri: redirectUri,
+            response_type: "code",
+            scope: "openid profile email",
+            state,
+            nonce,
+          });
+
+          window.location.href = `${PANTHEON_BASE_URL}/oauth/authorize?${params}`;
+          return; // page will navigate away
         }
 
         const adapter = createPantheonAdapter(client);
@@ -175,8 +221,19 @@ export function PantheonSDKProvider(props: ParentProps) {
             </div>
           )}
           {loginState() === "error" && (
-            <div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#f66">
-              Login failed: {loginError()}
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:12px">
+              <div style="color:#f66">Login failed: {loginError()}</div>
+              <button
+                style="padding:8px 16px;border-radius:6px;background:#333;color:#fff;border:none;cursor:pointer"
+                onClick={() => {
+                  client.clearToken();
+                  setLoginError("");
+                  // Re-trigger OIDC redirect
+                  setLoginState("pending");
+                }}
+              >
+                Retry login
+              </button>
             </div>
           )}
           {loginState() === "ok" && props.children}
