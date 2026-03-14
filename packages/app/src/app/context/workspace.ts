@@ -3156,6 +3156,39 @@ export function createWorkspaceStore(options: {
     }
   }
 
+  // ── Auto-connect to remote worker when VITE_OPENWORK_URL is set ──────
+  const [autoConnecting, setAutoConnecting] = createSignal(false);
+
+  const remoteUrlFromEnv =
+    typeof import.meta.env?.VITE_OPENWORK_URL === "string"
+      ? import.meta.env.VITE_OPENWORK_URL.trim()
+      : "";
+
+  if (remoteUrlFromEnv && !isTauriRuntime()) {
+    let autoConnectFired = false;
+    createEffect(() => {
+      const ws = workspaces();
+      if (ws.length > 0 || autoConnectFired) return;
+      if (typeof window === "undefined") return;
+      autoConnectFired = true;
+      setAutoConnecting(true);
+      queueMicrotask(async () => {
+        try {
+          await createRemoteWorkspaceFlow({
+            openworkHostUrl: remoteUrlFromEnv,
+            openworkToken: null,
+            directory: null,
+            displayName: "Remote Worker",
+          });
+        } catch (e) {
+          console.error("[workspace] auto-connect failed:", e);
+        } finally {
+          setAutoConnecting(false);
+        }
+      });
+    });
+  }
+
   return {
     engine,
     engineDoctorResult,
@@ -3169,6 +3202,7 @@ export function createWorkspaceStore(options: {
     projectDir,
     workspaces,
     activeWorkspaceId,
+    autoConnecting,
     authorizedDirs,
     newAuthorizedDir,
     workspaceConfig,

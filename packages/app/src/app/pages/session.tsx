@@ -3673,31 +3673,54 @@ export default function SessionView(props: SessionViewProps) {
             >
               <div class="max-w-[650px] mx-auto w-full">
             <Show when={showWorkspaceSetupEmptyState()}>
-              <div class="mx-auto max-w-xl rounded-3xl border border-gray-6 bg-gray-2/60 p-8 text-center shadow-sm">
-                <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-gray-6 bg-gray-1 text-gray-11">
-                  <HardDrive size={24} />
-                </div>
-                <h3 class="text-2xl font-semibold text-gray-12">Set up your first worker</h3>
-                <p class="mt-2 text-sm text-gray-10">
-                  OpenWork needs a local or remote worker before you can start a session.
-                </p>
-                <div class="mt-6 grid gap-3 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    class="rounded-2xl border border-gray-7 bg-gray-12 px-4 py-3 text-sm font-semibold text-gray-1 transition-colors hover:bg-gray-11"
-                    onClick={props.openCreateWorkspace}
-                  >
-                    Create local worker
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-2xl border border-gray-7 bg-gray-1 px-4 py-3 text-sm font-semibold text-gray-12 transition-colors hover:bg-gray-3"
-                    onClick={props.openCreateRemoteWorkspace}
-                  >
-                    Connect remote worker
-                  </button>
-                </div>
-              </div>
+              {(() => {
+                const hasRemoteEnv =
+                  typeof import.meta.env?.VITE_OPENWORK_URL === "string" &&
+                  import.meta.env.VITE_OPENWORK_URL.trim().length > 0;
+
+                return hasRemoteEnv ? (
+                  <div class="mx-auto max-w-xl rounded-3xl border border-gray-6 bg-gray-2/60 p-8 text-center shadow-sm">
+                    <div class="mx-auto mb-4 flex h-10 w-10 items-center justify-center">
+                      <div class="h-6 w-6 animate-spin rounded-full border-2 border-gray-6 border-t-gray-12" />
+                    </div>
+                    <h3 class="text-lg font-semibold text-gray-12">Connecting to remote worker&hellip;</h3>
+                    <p class="mt-1 text-sm text-gray-10">Setting up your workspace automatically.</p>
+                    <button
+                      type="button"
+                      class="mt-4 text-xs text-gray-8 hover:text-gray-11 transition-colors"
+                      onClick={props.openCreateWorkspace}
+                    >
+                      Advanced: add local worker instead
+                    </button>
+                  </div>
+                ) : (
+                  <div class="mx-auto max-w-xl rounded-3xl border border-gray-6 bg-gray-2/60 p-8 text-center shadow-sm">
+                    <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-gray-6 bg-gray-1 text-gray-11">
+                      <HardDrive size={24} />
+                    </div>
+                    <h3 class="text-2xl font-semibold text-gray-12">Set up your first worker</h3>
+                    <p class="mt-2 text-sm text-gray-10">
+                      OpenWork needs a local or remote worker before you can start a session.
+                    </p>
+                    <div class="mt-6 grid gap-3 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        class="rounded-2xl border border-gray-7 bg-gray-12 px-4 py-3 text-sm font-semibold text-gray-1 transition-colors hover:bg-gray-11"
+                        onClick={props.openCreateWorkspace}
+                      >
+                        Create local worker
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded-2xl border border-gray-7 bg-gray-1 px-4 py-3 text-sm font-semibold text-gray-12 transition-colors hover:bg-gray-3"
+                        onClick={props.openCreateRemoteWorkspace}
+                      >
+                        Connect remote worker
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </Show>
             <Show when={props.messages.length === 0 && !showWorkspaceSetupEmptyState()}>
               <div class="text-center py-16 px-6 space-y-6">

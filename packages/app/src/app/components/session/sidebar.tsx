@@ -565,23 +565,12 @@ export default function SessionSidebar(props: SidebarProps) {
                     type="button"
                     class="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-11 hover:bg-gray-2 transition-colors"
                     onClick={() => {
-                      props.onCreateWorkspace();
-                      setAddWorkspaceMenuOpen(false);
-                    }}
-                  >
-                    <Plus size={12} />
-                    New worker
-                  </button>
-                  <button
-                    type="button"
-                    class="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-11 hover:bg-gray-2 transition-colors"
-                    onClick={() => {
                       props.onCreateRemoteWorkspace();
                       setAddWorkspaceMenuOpen(false);
                     }}
                   >
                     <Plus size={12} />
-                    Connect remote
+                    Connect remote worker
                   </button>
                   <button
                     type="button"
