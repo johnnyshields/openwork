@@ -2,12 +2,10 @@ import { NextRequest } from "next/server";
 
 const DEFAULT_API_BASE = "https://api.openwork.software";
 const DEFAULT_AUTH_ORIGIN = "https://app.openwork.software";
-const DEFAULT_AUTH_FALLBACK_BASE = "https://den-control-plane-openwork.onrender.com";
 const NO_BODY_STATUS = new Set([204, 205, 304]);
 
-const apiBase = normalizeBaseUrl(process.env.DEN_API_BASE ?? DEFAULT_API_BASE);
-const authOrigin = normalizeBaseUrl(process.env.DEN_AUTH_ORIGIN ?? DEFAULT_AUTH_ORIGIN);
-const authFallbackBase = normalizeBaseUrl(process.env.DEN_AUTH_FALLBACK_BASE ?? DEFAULT_AUTH_FALLBACK_BASE);
+const apiBase = normalizeBaseUrl(process.env.PANTHEON_API_BASE ?? DEFAULT_API_BASE);
+const authOrigin = normalizeBaseUrl(process.env.PANTHEON_AUTH_ORIGIN ?? DEFAULT_AUTH_ORIGIN);
 
 type ProxyOptions = {
   routePrefix: string;
@@ -61,43 +59,6 @@ function isLikelyHtmlBody(body: ArrayBuffer): boolean {
   return preview.startsWith("<!doctype") || preview.startsWith("<html") || preview.includes("<body");
 }
 
-function isLikelyCannotGetBody(body: ArrayBuffer): boolean {
-  if (body.byteLength === 0) {
-    return false;
-  }
-
-  const preview = new TextDecoder().decode(body.slice(0, 256)).trim().toLowerCase();
-  return preview.includes("cannot get ");
-}
-
-function isAdminTargetPath(targetPath: string): boolean {
-  return targetPath === "v1/admin" || targetPath.startsWith("v1/admin/");
-}
-
-function shouldFallbackToAuthBase(response: Response, body: ArrayBuffer, targetPath: string): boolean {
-  if (response.status === 502 || response.status === 503 || response.status === 504) {
-    return true;
-  }
-
-  if (response.status === 404 && isAdminTargetPath(targetPath)) {
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (contentType.includes("text/html") || isLikelyHtmlBody(body) || isLikelyCannotGetBody(body)) {
-      return true;
-    }
-  }
-
-  if (response.status < 500) {
-    return false;
-  }
-
-  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  if (contentType.includes("text/html")) {
-    return true;
-  }
-
-  return isLikelyHtmlBody(body);
-}
-
 function buildUpstreamErrorResponse(status: number, error: string): Response {
   return new Response(JSON.stringify({ error }), {
     status,
@@ -130,7 +91,6 @@ function buildHeaders(request: NextRequest, contentType: string | null): Headers
   const copyHeaders = [
     "accept",
     "authorization",
-    "cookie",
     "user-agent",
     "x-requested-with",
     "origin",
@@ -193,7 +153,7 @@ function rewriteLocationHeader(location: string, request: NextRequest): string {
   }
 
   const requestOrigin = new URL(request.url).origin;
-  const rewriteableOrigins = [apiBase, authFallbackBase]
+  const rewriteableOrigins = [apiBase]
     .map((value) => {
       try {
         return new URL(value).origin;
@@ -216,40 +176,21 @@ export async function proxyUpstream(
   options: ProxyOptions,
 ): Promise<Response> {
   const targetPath = getTargetPath(request, segments, options.routePrefix);
-  const primaryTargetUrl = buildTargetUrl(apiBase, request, targetPath, options.upstreamPathPrefix);
-  const fallbackTargetUrl = buildTargetUrl(authFallbackBase, request, targetPath, options.upstreamPathPrefix);
+  const targetUrl = buildTargetUrl(apiBase, request, targetPath, options.upstreamPathPrefix);
   const contentType = request.headers.get("content-type");
   const requestBody = request.method !== "GET" && request.method !== "HEAD"
     ? new Uint8Array(await request.arrayBuffer())
     : null;
 
-  let upstream: Response | null = null;
-  let body: ArrayBuffer | null = null;
+  let upstream: Response;
+  let body: ArrayBuffer;
 
   try {
-    const primary = await fetchUpstream(request, primaryTargetUrl, contentType, requestBody);
-    upstream = primary.response;
-    body = primary.body;
+    const result = await fetchUpstream(request, targetUrl, contentType, requestBody);
+    upstream = result.response;
+    body = result.body;
   } catch {
-    if (apiBase !== authFallbackBase) {
-      try {
-        const fallback = await fetchUpstream(request, fallbackTargetUrl, contentType, requestBody);
-        upstream = fallback.response;
-        body = fallback.body;
-      } catch {}
-    }
-  }
-
-  if (!upstream || !body) {
     return buildUpstreamErrorResponse(502, "Upstream request failed.");
-  }
-
-  if (apiBase !== authFallbackBase && shouldFallbackToAuthBase(upstream, body, targetPath)) {
-    try {
-      const fallback = await fetchUpstream(request, fallbackTargetUrl, contentType, requestBody);
-      upstream = fallback.response;
-      body = fallback.body;
-    } catch {}
   }
 
   const responseContentType = upstream.headers.get("content-type")?.toLowerCase() ?? "";

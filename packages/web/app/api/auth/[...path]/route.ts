@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 async function proxy(request: NextRequest, segments: string[] = []) {
   return proxyUpstream(request, segments, {
     routePrefix: "/api/auth",
-    upstreamPathPrefix: "api/auth",
+    upstreamPathPrefix: "auth",
     rewriteAuthLocationsToRequestOrigin: true,
   });
 }

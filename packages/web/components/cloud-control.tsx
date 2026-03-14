@@ -159,7 +159,23 @@ const WORKER_STATUS_POLL_MS = 5000;
 const DEFAULT_AUTH_NAME = "OpenWork User";
 const OPENWORK_APP_CONNECT_BASE_URL = (process.env.NEXT_PUBLIC_OPENWORK_APP_CONNECT_URL ?? "").trim();
 const OPENWORK_AUTH_CALLBACK_BASE_URL = (process.env.NEXT_PUBLIC_OPENWORK_AUTH_CALLBACK_URL ?? "").trim();
+const PANTHEON_LOGIN_URL = (process.env.NEXT_PUBLIC_PANTHEON_LOGIN_URL ?? "").trim();
 const BILLING_DISABLED_FOR_EXPERIMENT = true;
+
+/** Check URL for ?pantheon_token= param (redirect back from Pantheon login). */
+function extractPantheonTokenFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("pantheon_token");
+  if (token) {
+    // Clean URL
+    const url = new URL(window.location.href);
+    url.searchParams.delete("pantheon_token");
+    window.history.replaceState({}, "", url.pathname + url.search);
+    return token;
+  }
+  return null;
+}
 
 function getEmailDomain(email: string): string {
   const atIndex = email.lastIndexOf("@");
@@ -406,25 +422,35 @@ function getErrorMessage(payload: unknown, fallback: string): string {
 }
 
 function getUser(payload: unknown): AuthUser | null {
-  if (!isRecord(payload) || !isRecord(payload.user)) {
+  if (!isRecord(payload)) {
     return null;
   }
 
-  const user = payload.user;
-  if (typeof user.id !== "string" || typeof user.email !== "string") {
+  // Pantheon /backend/me returns the user directly; /backend/login wraps it in { user }.
+  const user = isRecord(payload.user) ? payload.user : payload;
+
+  // Pantheon user has username as primary identifier, email may also be present.
+  const id = typeof user.id === "string" ? user.id : (typeof user.username === "string" ? user.username : null);
+  const email = typeof user.email === "string" ? user.email : (typeof user.username === "string" ? user.username : null);
+
+  if (!id || !email) {
     return null;
   }
 
   return {
-    id: user.id,
-    email: user.email,
-    name: typeof user.name === "string" ? user.name : null
+    id,
+    email,
+    name: typeof user.display_name === "string" ? user.display_name : (typeof user.name === "string" ? user.name : null)
   };
 }
 
 function getToken(payload: unknown): string | null {
   if (!isRecord(payload)) {
     return null;
+  }
+  // Pantheon returns access_token; fall back to token for backwards compatibility.
+  if (typeof payload.access_token === "string") {
+    return payload.access_token;
   }
   return typeof payload.token === "string" ? payload.token : null;
 }
@@ -437,16 +463,17 @@ function getCheckoutUrl(payload: unknown): string | null {
 }
 
 function getWorker(payload: unknown): WorkerLaunch | null {
-  if (!isRecord(payload) || !isRecord(payload.worker)) {
+  if (!isRecord(payload)) {
     return null;
   }
 
-  const worker = payload.worker;
+  // Pantheon returns the worker flat; Den wrapped it in { worker, instance, tokens }.
+  const worker = isRecord(payload.worker) ? payload.worker : payload;
   if (typeof worker.id !== "string" || typeof worker.name !== "string") {
     return null;
   }
 
-  const instance = isRecord(payload.instance) ? payload.instance : null;
+  const instance = isRecord(payload.instance) ? payload.instance : (isRecord(worker.instance) ? worker.instance : null);
   const tokens = isRecord(payload.tokens) ? payload.tokens : null;
 
   return {
@@ -463,16 +490,17 @@ function getWorker(payload: unknown): WorkerLaunch | null {
 }
 
 function getWorkerSummary(payload: unknown): WorkerSummary | null {
-  if (!isRecord(payload) || !isRecord(payload.worker)) {
+  if (!isRecord(payload)) {
     return null;
   }
 
-  const worker = payload.worker;
+  // Pantheon returns flat worker; Den wrapped in { worker, instance }.
+  const worker = isRecord(payload.worker) ? payload.worker : payload;
   if (typeof worker.id !== "string" || typeof worker.name !== "string") {
     return null;
   }
 
-  const instance = isRecord(payload.instance) ? payload.instance : null;
+  const instance = isRecord(payload.instance) ? payload.instance : (isRecord(worker.instance) ? worker.instance : null);
 
   return {
     workerId: worker.id,
@@ -485,15 +513,20 @@ function getWorkerSummary(payload: unknown): WorkerSummary | null {
 }
 
 function getWorkerTokens(payload: unknown): WorkerTokens | null {
-  if (!isRecord(payload) || !isRecord(payload.tokens)) {
+  if (!isRecord(payload)) {
     return null;
   }
 
-  const tokens = payload.tokens;
+  // Pantheon returns flat { host_token, client_token, connect_url };
+  // Den wrapped in { tokens: { host, client }, connect: { openworkUrl } }.
+  const tokens = isRecord(payload.tokens) ? payload.tokens : payload;
   const connect = isRecord(payload.connect) ? payload.connect : null;
-  const clientToken = typeof tokens.client === "string" ? tokens.client : null;
-  const hostToken = typeof tokens.host === "string" ? tokens.host : null;
-  const openworkUrl = connect && typeof connect.openworkUrl === "string" ? connect.openworkUrl : null;
+  const clientToken = typeof tokens.client === "string" ? tokens.client
+    : typeof tokens.client_token === "string" ? tokens.client_token : null;
+  const hostToken = typeof tokens.host === "string" ? tokens.host
+    : typeof tokens.host_token === "string" ? tokens.host_token : null;
+  const openworkUrl = connect && typeof connect.openworkUrl === "string" ? connect.openworkUrl
+    : typeof tokens.connect_url === "string" ? tokens.connect_url : null;
   const workspaceId = connect && typeof connect.workspaceId === "string" ? connect.workspaceId : null;
 
   if (!clientToken && !hostToken) {
@@ -649,7 +682,8 @@ function parseWorkerListItem(value: unknown): WorkerListItem | null {
   }
 
   const instance = isRecord(value.instance) ? value.instance : null;
-  const createdAt = typeof value.createdAt === "string" ? value.createdAt : null;
+  const createdAt = typeof value.createdAt === "string" ? value.createdAt
+    : typeof value.created_at === "string" ? value.created_at : null;
 
   return {
     workerId,
@@ -657,18 +691,21 @@ function parseWorkerListItem(value: unknown): WorkerListItem | null {
     status: typeof value.status === "string" ? value.status : "unknown",
     instanceUrl: instance && typeof instance.url === "string" ? instance.url : null,
     provider: instance && typeof instance.provider === "string" ? instance.provider : null,
-    isMine: value.isMine === true,
+    isMine: value.isMine !== false,  // Pantheon only returns own workers (no isMine field), default true
     createdAt
   };
 }
 
 function getWorkersList(payload: unknown): WorkerListItem[] {
-  if (!isRecord(payload) || !Array.isArray(payload.workers)) {
-    return [];
-  }
+  // Pantheon returns a flat array; Den wrapped in { workers: [...] }.
+  const items = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.workers)
+      ? payload.workers
+      : [];
 
   const rows: WorkerListItem[] = [];
-  for (const item of payload.workers) {
+  for (const item of items) {
     const parsed = parseWorkerListItem(item);
     if (parsed) {
       rows.push(parsed);
@@ -1047,6 +1084,13 @@ export function CloudControlPanel() {
       return null;
     }
 
+    // Check for token from Pantheon redirect (?pantheon_token=...)
+    const urlToken = extractPantheonTokenFromUrl();
+    if (urlToken) {
+      window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, urlToken);
+      return urlToken;
+    }
+
     const token = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
     if (!token || token.trim().length === 0) {
       return null;
@@ -1290,7 +1334,7 @@ export function CloudControlPanel() {
     setWorkersError(null);
 
     try {
-      const { response, payload } = await requestJson("/v1/workers?limit=20", {
+      const { response, payload } = await requestJson("/backend/workers?limit=20", {
         method: "GET",
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined
       });
@@ -1360,7 +1404,7 @@ export function CloudControlPanel() {
     }
 
     try {
-      const { response, payload } = await requestJson(`/v1/workers/${encodeURIComponent(targetWorkerId)}/runtime`, {
+      const { response, payload } = await requestJson(`/backend/workers/${encodeURIComponent(targetWorkerId)}/runtime`, {
         method: "GET",
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined
       }, 12000);
@@ -1404,7 +1448,7 @@ export function CloudControlPanel() {
     setRuntimeError(null);
 
     try {
-      const { response, payload } = await requestJson(`/v1/workers/${encodeURIComponent(targetWorkerId)}/runtime/upgrade`, {
+      const { response, payload } = await requestJson(`/backend/workers/${encodeURIComponent(targetWorkerId)}/runtime/upgrade`, {
         method: "POST",
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
         body: JSON.stringify({ services: ["openwork-server", "opencode"] })
@@ -1475,7 +1519,7 @@ export function CloudControlPanel() {
 
     try {
       const query = includeCheckout ? "?includeCheckout=1" : "";
-      const { response, payload } = await requestJson(`/v1/workers/billing${query}`, {
+      const { response, payload } = await requestJson(`/backend/workers/billing${query}`, {
         method: "GET",
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined
       }, 12000);
@@ -1545,7 +1589,7 @@ export function CloudControlPanel() {
     setBillingError(null);
 
     try {
-      const { response, payload } = await requestJson("/v1/workers/billing/subscription", {
+      const { response, payload } = await requestJson("/backend/workers/billing/subscription", {
         method: "POST",
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
         body: JSON.stringify({ cancelAtPeriodEnd })
@@ -1601,7 +1645,7 @@ export function CloudControlPanel() {
       headers.set("Authorization", `Bearer ${authToken}`);
     }
 
-    const { response, payload } = await requestJson("/v1/me", { method: "GET", headers }, 12000);
+    const { response, payload } = await requestJson("/backend/me", { method: "GET", headers }, 12000);
 
     if (!response.ok) {
       setUser(null);
@@ -1830,8 +1874,17 @@ export function CloudControlPanel() {
       return;
     }
 
+    // If Pantheon login URL is configured and we have no token, redirect to Pantheon.
+    if (PANTHEON_LOGIN_URL && !authToken && typeof window !== "undefined") {
+      const callbackUrl = window.location.origin + window.location.pathname;
+      const loginUrl = new URL(PANTHEON_LOGIN_URL);
+      loginUrl.searchParams.set("redirect", callbackUrl);
+      window.location.href = loginUrl.toString();
+      return;
+    }
+
     setStep(1);
-  }, [user, checkoutUrl]);
+  }, [user, checkoutUrl, authToken]);
 
   useEffect(() => {
     if (step !== 2) {
@@ -1909,21 +1962,13 @@ export function CloudControlPanel() {
     });
 
     try {
-      const endpoint = authMode === "sign-up" ? "/api/auth/sign-up/email" : "/api/auth/sign-in/email";
       const trimmedEmail = email.trim();
-      const body =
-        authMode === "sign-up"
-          ? {
-              name: DEFAULT_AUTH_NAME,
-              email: trimmedEmail,
-              password
-            }
-          : {
-              email: trimmedEmail,
-              password
-            };
+      const body = {
+        email: trimmedEmail,
+        password
+      };
 
-      const { response, payload } = await requestJson(endpoint, {
+      const { response, payload } = await requestJson("/api/den/backend/login", {
         method: "POST",
         body: JSON.stringify(body)
       });
@@ -2015,55 +2060,110 @@ export function CloudControlPanel() {
     });
 
     try {
-      const callbackURL = getSocialCallbackUrl();
-      const { response, payload } = await requestJson("/api/auth/sign-in/social", {
-        method: "POST",
-        body: JSON.stringify({
-          provider,
-          callbackURL,
-          errorCallbackURL: callbackURL
-        })
-      });
+      if (provider === "google") {
+        // Google OAuth: POST to Pantheon's Google login endpoint.
+        // In a real flow this would collect a Google ID token first;
+        // for now we redirect via the Pantheon endpoint which handles the OAuth dance.
+        const callbackURL = getSocialCallbackUrl();
+        const { response, payload } = await requestJson("/api/den/backend/login/google", {
+          method: "POST",
+          body: JSON.stringify({ callbackURL })
+        });
 
-      if (!response.ok) {
+        if (!response.ok) {
+          if (shouldTrackSocialSignup) {
+            window.sessionStorage.removeItem(PENDING_SOCIAL_SIGNUP_STORAGE_KEY);
+          }
+          setAuthInfo(getAuthInfoForMode(authMode));
+          setAuthError(getErrorMessage(payload, `Google sign-in failed with ${response.status}.`));
+          trackPosthogEvent("den_auth_failed", { mode: authMode, method: provider, status: response.status });
+          setAuthBusy(false);
+          return;
+        }
+
+        const token = getToken(payload);
+        if (token) {
+          setAuthToken(token);
+          const authenticatedUser = getUser(payload);
+          if (authenticatedUser) {
+            setUser(authenticatedUser);
+            setAuthInfo(`Signed in as ${authenticatedUser.email}.`);
+            identifyPosthogUser(authenticatedUser);
+            setStep(2);
+          }
+          setAuthBusy(false);
+          return;
+        }
+
+        const payloadUrl = isRecord(payload) && typeof payload.url === "string" ? payload.url.trim() : "";
+        const headerUrl = response.headers.get("location")?.trim() ?? "";
+        const redirectUrl = payloadUrl || headerUrl;
+
+        if (redirectUrl) {
+          trackPosthogEvent("den_auth_redirected", { mode: authMode, method: provider });
+          window.location.assign(redirectUrl);
+          return;
+        }
+
         if (shouldTrackSocialSignup) {
           window.sessionStorage.removeItem(PENDING_SOCIAL_SIGNUP_STORAGE_KEY);
         }
         setAuthInfo(getAuthInfoForMode(authMode));
-        setAuthError(getErrorMessage(payload, `${getSocialProviderLabel(provider)} sign-in failed with ${response.status}.`));
-        trackPosthogEvent("den_auth_failed", {
-          mode: authMode,
-          method: provider,
-          status: response.status
-        });
+        setAuthError("Google sign-in did not return a token or redirect URL.");
         setAuthBusy(false);
         return;
       }
 
-      const payloadUrl = isRecord(payload) && typeof payload.url === "string" ? payload.url.trim() : "";
-      const headerUrl = response.headers.get("location")?.trim() ?? "";
+      // GitHub SSH: challenge-response via Pantheon auth endpoints.
+      const { response: challengeResponse, payload: challengePayload } = await requestJson("/api/auth/challenge", {
+        method: "POST",
+        body: JSON.stringify({ provider: "github" })
+      });
+
+      if (!challengeResponse.ok) {
+        if (shouldTrackSocialSignup) {
+          window.sessionStorage.removeItem(PENDING_SOCIAL_SIGNUP_STORAGE_KEY);
+        }
+        setAuthInfo(getAuthInfoForMode(authMode));
+        setAuthError(getErrorMessage(challengePayload, `GitHub sign-in failed with ${challengeResponse.status}.`));
+        trackPosthogEvent("den_auth_failed", { mode: authMode, method: provider, status: challengeResponse.status });
+        setAuthBusy(false);
+        return;
+      }
+
+      // The challenge endpoint returns data the user needs to sign;
+      // for the web flow we redirect to the verify endpoint or display challenge info.
+      const payloadUrl = isRecord(challengePayload) && typeof challengePayload.url === "string" ? challengePayload.url.trim() : "";
+      const headerUrl = challengeResponse.headers.get("location")?.trim() ?? "";
       const redirectUrl = payloadUrl || headerUrl;
 
-      if (!redirectUrl) {
-        if (shouldTrackSocialSignup) {
-          window.sessionStorage.removeItem(PENDING_SOCIAL_SIGNUP_STORAGE_KEY);
+      if (redirectUrl) {
+        trackPosthogEvent("den_auth_redirected", { mode: authMode, method: provider });
+        window.location.assign(redirectUrl);
+        return;
+      }
+
+      // If no redirect, try to extract token directly (in case challenge auto-resolved).
+      const token = getToken(challengePayload);
+      if (token) {
+        setAuthToken(token);
+        const authenticatedUser = getUser(challengePayload);
+        if (authenticatedUser) {
+          setUser(authenticatedUser);
+          setAuthInfo(`Signed in as ${authenticatedUser.email}.`);
+          identifyPosthogUser(authenticatedUser);
+          setStep(2);
         }
-        setAuthInfo(getAuthInfoForMode(authMode));
-        setAuthError(`${getSocialProviderLabel(provider)} sign-in did not return a redirect URL.`);
-        trackPosthogEvent("den_auth_failed", {
-          mode: authMode,
-          method: provider,
-          reason: "missing_redirect_url"
-        });
         setAuthBusy(false);
         return;
       }
 
-      trackPosthogEvent("den_auth_redirected", {
-        mode: authMode,
-        method: provider
-      });
-      window.location.assign(redirectUrl);
+      if (shouldTrackSocialSignup) {
+        window.sessionStorage.removeItem(PENDING_SOCIAL_SIGNUP_STORAGE_KEY);
+      }
+      setAuthInfo(getAuthInfoForMode(authMode));
+      setAuthError("GitHub sign-in did not return a token or redirect URL.");
+      setAuthBusy(false);
     } catch (error) {
       if (shouldTrackSocialSignup) {
         window.sessionStorage.removeItem(PENDING_SOCIAL_SIGNUP_STORAGE_KEY);
@@ -2089,11 +2189,8 @@ export function CloudControlPanel() {
     setAuthError(null);
 
     try {
-      await requestJson("/api/auth/sign-out", {
-        method: "POST",
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
-        body: JSON.stringify({})
-      });
+      // Pantheon is stateless JWT — just clear the local token.
+      // No server-side sign-out endpoint needed.
     } catch {
       // Ignore sign-out transport issues and clear local session state anyway.
     } finally {
@@ -2157,13 +2254,13 @@ export function CloudControlPanel() {
 
     try {
       const { response, payload } = await requestJson(
-        "/v1/workers",
+        "/backend/workers",
         {
           method: "POST",
           headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
           body: JSON.stringify({
             name: workerName.trim() || "Cloud Worker",
-            destination: "cloud"
+            destination: "docker"
           })
         },
         12000
@@ -2299,7 +2396,7 @@ export function CloudControlPanel() {
     }
 
     try {
-      const { response, payload } = await requestJson(`/v1/workers/${encodeURIComponent(id)}`, {
+      const { response, payload } = await requestJson(`/backend/workers/${encodeURIComponent(id)}`, {
         method: "GET",
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined
       });
@@ -2400,7 +2497,7 @@ export function CloudControlPanel() {
     setLaunchError(null);
 
     try {
-      const { response, payload } = await requestJson(`/v1/workers/${encodeURIComponent(id)}/tokens`, {
+      const { response, payload } = await requestJson(`/backend/workers/${encodeURIComponent(id)}/tokens`, {
         method: "POST",
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
         body: JSON.stringify({})
@@ -2481,7 +2578,7 @@ export function CloudControlPanel() {
     setLaunchError(null);
 
     try {
-      const { response, payload } = await requestJson(`/v1/workers/${encodeURIComponent(workerId)}`, {
+      const { response, payload } = await requestJson(`/backend/workers/${encodeURIComponent(workerId)}`, {
         method: "DELETE",
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined
       });

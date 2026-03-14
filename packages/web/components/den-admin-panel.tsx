@@ -192,12 +192,12 @@ function getFriendlyHtmlError(value: string): string | null {
     return null;
   }
 
-  if (lower.includes("cannot get /v1/admin/overview")) {
-    return "The Den admin API is not live on the upstream service yet. The backend deploy likely failed or is still rolling out.";
+  if (lower.includes("cannot get /backend/admin/overview") || lower.includes("cannot get /v1/admin/overview")) {
+    return "The admin API is not live on the upstream service yet. The backend deploy likely failed or is still rolling out.";
   }
 
   if (lower.startsWith("<!doctype") || lower.startsWith("<html")) {
-    return "The upstream Den service returned HTML instead of JSON. This usually means the admin backend route is stale or unavailable.";
+    return "The upstream service returned HTML instead of JSON. This usually means the admin backend route is stale or unavailable.";
   }
 
   return null;
@@ -402,7 +402,7 @@ export function DenAdminPanel() {
 
     try {
       const suffix = loadBilling ? "?includeBilling=1" : "";
-      const { response, payload: nextPayload } = await requestJson(`/v1/admin/overview${suffix}`);
+      const { response, payload: nextPayload } = await requestJson(`/backend/admin/overview${suffix}`);
 
       if (response.status === 401) {
         setAccessState("signed-out");

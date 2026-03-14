@@ -4,11 +4,10 @@ Frontend for `app.openwork.software`.
 
 ## What it does
 
-- Signs up / signs in users against Den service auth.
-- Launches cloud workers via `POST /v1/workers`.
-- Handles paywall responses (`402 payment_required`) and shows Polar checkout links.
-- Uses a Next.js proxy route (`/api/den/*`) to reach `api.openwork.software` without browser CORS issues.
-- Uses a same-origin auth proxy (`/api/auth/*`) so GitHub OAuth callbacks can land on `app.openwork.software`.
+- Signs up / signs in users against Pantheon auth service.
+- Launches cloud workers via `POST /backend/workers`.
+- Uses a Next.js proxy route (`/api/den/*`) to reach the Pantheon API without browser CORS issues.
+- Uses a same-origin auth proxy (`/api/auth/*`) for SSH key challenge-response auth flows.
 
 ## Local development
 
@@ -21,12 +20,10 @@ Frontend for `app.openwork.software`.
 
 ### Optional env vars
 
-- `DEN_API_BASE` (server-only): upstream API base used by proxy route.
+- `PANTHEON_API_BASE` (server-only): upstream Pantheon API base used by proxy route.
   - default: `https://api.openwork.software`
-- `DEN_AUTH_ORIGIN` (server-only): Origin header sent to Better Auth endpoints when the browser request does not include one.
+- `PANTHEON_AUTH_ORIGIN` (server-only): Origin header sent to Pantheon auth endpoints when the browser request does not include one.
   - default: `https://app.openwork.software`
-- `DEN_AUTH_FALLBACK_BASE` (server-only): fallback Den origin used if `DEN_API_BASE` serves an HTML/5xx error.
-  - default: `https://den-control-plane-openwork.onrender.com`
 - `NEXT_PUBLIC_OPENWORK_APP_CONNECT_URL` (client): Base URL for "Open in App" links.
   - Example: `https://openwork.software/app`
   - The web panel appends `/connect-remote` and injects worker URL/token params automatically.
