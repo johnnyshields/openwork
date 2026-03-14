@@ -23,6 +23,7 @@ export type MessageListProps = {
   workspaceRoot?: string;
   scrollElement?: () => HTMLElement | undefined;
   setScrollToMessageById?: (handler: ((messageId: string, behavior?: ScrollBehavior) => boolean) | null) => void;
+  loader?: JSX.Element;
   footer?: JSX.Element;
 };
 
@@ -1090,7 +1091,7 @@ export default function MessageList(props: MessageListProps) {
         fallback={(
           <div class="space-y-4">
             <For each={messageBlocks()}>{(block, blockIndex) => renderBlock(block, blockIndex())}</For>
-            <Show when={props.footer}>{props.footer}</Show>
+            <Show when={props.loader}>{props.loader}</Show>
           </div>
         )}
       >
@@ -1099,7 +1100,7 @@ export default function MessageList(props: MessageListProps) {
           fallback={(
             <div class="space-y-4">
               <For each={messageBlocks()}>{(block, blockIndex) => renderBlock(block, blockIndex())}</For>
-              <Show when={props.footer}>{props.footer}</Show>
+              <Show when={props.loader}>{props.loader}</Show>
             </div>
           )}
         >
