@@ -61,105 +61,204 @@ export function PantheonSDKProvider(props: ParentProps) {
     createOpencodeClient({ baseUrl: "about:blank" }),
   );
 
-  // OIDC login flow
+  // ── Handle popup callback (this page is the popup) ──────────────────
+  // If we're the popup landing on /auth/callback, exchange code and
+  // notify the parent window, then close ourselves.
+  const isCallback = (() => {
+    const url = new URL(window.location.href);
+    return url.pathname === "/auth/callback" && url.searchParams.has("code");
+  })();
+
+  if (isCallback) {
+    (async () => {
+      try {
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get("code")!;
+        const returnedState = url.searchParams.get("state");
+
+        const savedState = localStorage.getItem("pantheon.oidc.state");
+        console.log("[pantheon-oidc] callback", { code: code?.slice(0, 8), returnedState, savedState, match: savedState === returnedState });
+        if (!savedState || !returnedState || savedState !== returnedState) {
+          throw new Error(`Invalid OIDC state: saved=${savedState?.slice(0,8)} returned=${returnedState?.slice(0,8)}`);
+        }
+        localStorage.removeItem("pantheon.oidc.state");
+
+        const redirectUri = `${window.location.origin}/auth/callback`;
+        const codeVerifier = localStorage.getItem("pantheon.oidc.code_verifier") || "";
+        const result = await client.exchangeCode(code, redirectUri, codeVerifier);
+        localStorage.removeItem("pantheon.oidc.code_verifier");
+
+        // Validate nonce
+        const savedNonce = localStorage.getItem("pantheon.oidc.nonce");
+        if (savedNonce && result.id_token) {
+          const payload = JSON.parse(atob(result.id_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+          if (payload.nonce !== savedNonce) {
+            throw new Error("Invalid nonce in ID token");
+          }
+        }
+        localStorage.removeItem("pantheon.oidc.nonce");
+
+        // Signal success: write a flag that the parent can detect via storage event,
+        // then close. window.opener may be null after cross-origin redirects.
+        localStorage.setItem("pantheon.oidc.complete", Date.now().toString());
+        if (window.opener) {
+          window.opener.postMessage({ type: "pantheon-oidc-success" }, window.location.origin);
+        }
+        window.close();
+        // If window.close() is blocked (some browsers), redirect to root
+        setTimeout(() => { window.location.replace("/"); }, 500);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        localStorage.setItem("pantheon.oidc.error", msg);
+        if (window.opener) {
+          window.opener.postMessage({ type: "pantheon-oidc-error", error: msg }, window.location.origin);
+        }
+        window.close();
+        setTimeout(() => { window.location.replace("/"); }, 500);
+      }
+    })();
+    // Render nothing while callback processes
+  }
+
+  // ── Main login flow ─────────────────────────────────────────────────
+
+  function completeLogin() {
+    const adapter = createPantheonAdapter(client);
+    setAdapterClient(adapter as any);
+    setHealthy(true);
+    setLoginState("ok");
+  }
+
+  // Check for existing valid token on mount
   let loginInFlight = false;
   createEffect(() => {
     if (loginState() !== "pending") return;
+    if (isCallback) return; // popup handles its own flow
 
     (async () => {
       if (loginInFlight) return;
       loginInFlight = true;
 
       try {
-        // Step 1: Check if we're on the auth callback with a code
-        const url = new URL(window.location.href);
-        const code = url.searchParams.get("code");
-        const returnedState = url.searchParams.get("state");
-
-        if (code && returnedState && url.pathname === "/auth/callback") {
-          // Validate state to prevent CSRF
-          const savedState = sessionStorage.getItem("pantheon.oidc.state");
-          if (!savedState || savedState !== returnedState) {
-            throw new Error("Invalid OIDC state parameter — possible CSRF attack");
-          }
-          sessionStorage.removeItem("pantheon.oidc.state");
-
-          const redirectUri = `${window.location.origin}/auth/callback`;
-          const codeVerifier = sessionStorage.getItem("pantheon.oidc.code_verifier") || "";
-          const result = await client.exchangeCode(code, redirectUri, codeVerifier);
-          sessionStorage.removeItem("pantheon.oidc.code_verifier");
-
-          // Validate nonce in id_token
-          const savedNonce = sessionStorage.getItem("pantheon.oidc.nonce");
-          if (savedNonce && result.id_token) {
-            const payload = JSON.parse(atob(result.id_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-            if (payload.nonce !== savedNonce) {
-              throw new Error("Invalid nonce in ID token — possible replay attack");
-            }
-          }
-          sessionStorage.removeItem("pantheon.oidc.nonce");
-
-          // Clean the URL
-          window.history.replaceState({}, "", "/");
-        }
-
-        // Step 2: Check if we have a valid token
-        let authenticated = false;
         if (client.isLoggedIn()) {
           try {
             await client.me();
-            authenticated = true;
+            completeLogin();
+            return;
           } catch {
-            console.log("[pantheon-sdk] stored token invalid, redirecting to login");
+            console.log("[pantheon-sdk] stored token invalid");
             client.clearToken();
           }
         }
-
-        // Step 3: If not authenticated, redirect to Pantheon authorize endpoint
-        if (!authenticated) {
-          if (!PANTHEON_BASE_URL) {
-            throw new Error("VITE_OPENWORK_URL not configured — cannot redirect to Pantheon login");
-          }
-
-          const state = crypto.randomUUID();
-          const nonce = crypto.randomUUID();
-          sessionStorage.setItem("pantheon.oidc.state", state);
-          sessionStorage.setItem("pantheon.oidc.nonce", nonce);
-
-          const codeVerifier = generateCodeVerifier();
-          const codeChallenge = await generateCodeChallenge(codeVerifier);
-          sessionStorage.setItem("pantheon.oidc.code_verifier", codeVerifier);
-
-          const redirectUri = `${window.location.origin}/auth/callback`;
-          const params = new URLSearchParams({
-            client_id: "openwork",
-            redirect_uri: redirectUri,
-            response_type: "code",
-            scope: "openid profile email",
-            state,
-            nonce,
-            code_challenge: codeChallenge,
-            code_challenge_method: "S256",
-          });
-
-          window.location.href = `${PANTHEON_BASE_URL}/oauth/authorize?${params}`;
-          return; // page will navigate away
-        }
-
-        const adapter = createPantheonAdapter(client);
-        setAdapterClient(adapter as any);
-        setHealthy(true);
-        setLoginState("ok");
+        // No valid token — show login UI (not a redirect)
+        setLoginState("needs-login" as any);
       } catch (e) {
         loginInFlight = false;
         const msg = e instanceof Error ? e.message : String(e);
-        console.error("[pantheon-sdk] login failed:", msg);
+        console.error("[pantheon-sdk] auth check failed:", msg);
         setLoginError(msg);
         setLoginState("error");
         setHealthy(false);
       }
     })();
   });
+
+  // Listen for popup completion via postMessage or localStorage storage event.
+  // storage event fires when another window (the popup) writes to localStorage.
+  if (typeof window !== "undefined") {
+    const handlePopupDone = () => {
+      loginInFlight = false;
+      setLoginState("pending"); // re-trigger token check
+    };
+
+    window.addEventListener("message", (evt) => {
+      if (evt.origin !== window.location.origin) return;
+      if (evt.data?.type === "pantheon-oidc-success") handlePopupDone();
+      else if (evt.data?.type === "pantheon-oidc-error") {
+        setLoginError(evt.data.error || "Login failed");
+        setLoginState("error");
+      }
+    });
+
+    window.addEventListener("storage", (evt) => {
+      if (evt.key === "pantheon.oidc.complete" && evt.newValue) {
+        localStorage.removeItem("pantheon.oidc.complete");
+        handlePopupDone();
+      } else if (evt.key === "pantheon.oidc.error" && evt.newValue) {
+        const msg = evt.newValue;
+        localStorage.removeItem("pantheon.oidc.error");
+        setLoginError(msg);
+        setLoginState("error");
+      }
+    });
+  }
+
+  // Open OIDC popup
+  function openLoginPopup() {
+    if (!PANTHEON_BASE_URL) {
+      setLoginError("VITE_OPENWORK_URL not configured");
+      setLoginState("error");
+      return;
+    }
+
+    // Open popup immediately (before any async work) to preserve user gesture
+    const w = 500, h = 600;
+    const left = window.screenX + (window.outerWidth - w) / 2;
+    const top = window.screenY + (window.outerHeight - h) / 2;
+    const popup = window.open("about:blank", "pantheon-login", `width=${w},height=${h},left=${left},top=${top}`);
+
+    // Generate PKCE and navigate popup (async, but popup already open)
+    (async () => {
+      const state = crypto.randomUUID();
+      const nonce = crypto.randomUUID();
+      localStorage.setItem("pantheon.oidc.state", state);
+      localStorage.setItem("pantheon.oidc.nonce", nonce);
+
+      const codeVerifier = generateCodeVerifier();
+      const codeChallenge = await generateCodeChallenge(codeVerifier);
+      localStorage.setItem("pantheon.oidc.code_verifier", codeVerifier);
+
+      const redirectUri = `${window.location.origin}/auth/callback`;
+      const params = new URLSearchParams({
+        client_id: "openwork",
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope: "openid profile email",
+        state,
+        nonce,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+      });
+
+      const popupUrl = `${PANTHEON_BASE_URL}/oauth/authorize?${params}`;
+      if (popup) {
+        popup.location.href = popupUrl;
+      } else {
+        // Popup was blocked — fall back to redirect
+        window.location.href = popupUrl;
+      }
+    })();
+
+    // Poll for completion — most reliable cross-window detection.
+    // The popup's exchangeCode() stores the token in localStorage (pantheon.jwt).
+    // We also check pantheon.oidc.complete flag and popup closed state.
+    const poll = setInterval(() => {
+      // Check if popup wrote the completion flag or token appeared
+      const complete = localStorage.getItem("pantheon.oidc.complete");
+      const hasToken = client.isLoggedIn();
+      const popupClosed = !popup || popup.closed;
+
+      if (complete || (hasToken && popupClosed)) {
+        clearInterval(poll);
+        localStorage.removeItem("pantheon.oidc.complete");
+        loginInFlight = false;
+        setLoginState("pending"); // re-trigger token check
+      } else if (popupClosed && !hasToken) {
+        // Popup closed without completing login
+        clearInterval(poll);
+      }
+    }, 500);
+  }
 
   // ── Server context value ────────────────────────────────────────────
 
@@ -262,6 +361,17 @@ export function PantheonSDKProvider(props: ParentProps) {
               Connecting to Pantheon...
             </div>
           )}
+          {(loginState() as string) === "needs-login" && (
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px">
+              <div style="color:#aaa;font-size:14px">Sign in to continue</div>
+              <button
+                style="padding:10px 24px;border-radius:8px;background:#4f46e5;color:#fff;border:none;cursor:pointer;font-size:15px;font-weight:500"
+                onClick={() => openLoginPopup()}
+              >
+                Sign in with Pantheon
+              </button>
+            </div>
+          )}
           {loginState() === "error" && (
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:12px">
               <div style="color:#f66">Login failed: {loginError()}</div>
@@ -270,8 +380,7 @@ export function PantheonSDKProvider(props: ParentProps) {
                 onClick={() => {
                   client.clearToken();
                   setLoginError("");
-                  // Re-trigger OIDC redirect
-                  setLoginState("pending");
+                  openLoginPopup();
                 }}
               >
                 Retry login
