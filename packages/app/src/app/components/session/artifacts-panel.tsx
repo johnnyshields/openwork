@@ -46,7 +46,7 @@ const isCode = (value: string) => /\.(py|js|ts|tsx|jsx|rb|go|rs|sh|bash|zsh|bat|
 const isConfig = (value: string) => /\.(ini|cfg|conf|env|properties|editorconfig)$/i.test(value);
 const isDiagram = (value: string) => /\.(mermaid|dot|plantuml|puml)$/i.test(value);
 
-type ArtifactKind = "markdown" | "image" | "data" | "document" | "code" | "config" | "diagram";
+type ArtifactKind = "markdown" | "image" | "data" | "document" | "code" | "config" | "diagram" | "file";
 
 const artifactKind = (value: string): ArtifactKind | null => {
   if (isMarkdown(value)) return "markdown";
@@ -56,6 +56,8 @@ const artifactKind = (value: string): ArtifactKind | null => {
   if (isCode(value)) return "code";
   if (isConfig(value)) return "config";
   if (isDiagram(value)) return "diagram";
+  // Show any file with an extension as a generic artifact
+  if (/\.\w{1,10}$/.test(value)) return "file";
   return null;
 };
 
@@ -137,6 +139,7 @@ export default function ArtifactsPanel(props: ArtifactsPanelProps) {
                   case "code": return "CODE";
                   case "config": return "CFG";
                   case "diagram": return "DIA";
+                  case "file": return "FILE";
                   default: return null;
                 }
               };
