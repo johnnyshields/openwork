@@ -183,6 +183,16 @@ export function PantheonSDKProvider(props: ParentProps) {
             client.clearToken();
           }
         }
+        // Try localhost login first (works when PANTHEON_LOCALHOST_MODE=true)
+        try {
+          const result = await client.loginLocalhost();
+          if (result.token) {
+            completeLogin();
+            return;
+          }
+        } catch {
+          // Not in localhost mode — fall through to OIDC
+        }
         // No valid token — show login UI (not a redirect)
         setLoginState("needs-login" as any);
       } catch (e) {
