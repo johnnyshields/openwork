@@ -27,6 +27,7 @@ import {
   type PantheonStreamEvent,
 } from "../lib/pantheon-client";
 import type { MessageWithParts, PlaceholderAssistantMessage } from "../types";
+import { setPantheonSetConvPhase, setPantheonCompletedDelegations, setPantheonClearCompletedDelegation, setPantheonSetWatchedConversation, setPantheonWatchedMessages } from "./pantheon-sdk";
 
 // ---------------------------------------------------------------------------
 // Context shape
@@ -48,8 +49,10 @@ export interface PantheonContextValue {
   activeMessages: () => MessageWithParts[];
   isSending: () => boolean;
   isStreaming: () => boolean;
-  /** "idle" | "sending" | "thinking" | "responding" */
-  runPhase: () => "idle" | "sending" | "thinking" | "responding";
+  /** "idle" | "sending" | "thinking" | "responding" | "delegating" */
+  runPhase: () => "idle" | "sending" | "thinking" | "responding" | "delegating";
+  /** Set per-conversation run phase (used for delegation) */
+  setConvPhase: (convId: string, update: Partial<{ sending: boolean; delegating: boolean; receivedPart: boolean; receivedText: boolean }>) => void;
   /** Actions */
   setActiveConversation: (id: string | null) => void;
   createConversation: (opts?: {
@@ -75,6 +78,13 @@ export interface PantheonContextValue {
   }) => Promise<PantheonWorkspace | null>;
   deleteWorkspace: (id: string) => Promise<void>;
   refreshWorkspaces: () => Promise<void>;
+  /** Delegation completion tracking */
+  completedDelegations: () => Array<{ id: string; title: string }>;
+  clearCompletedDelegation: (id: string) => void;
+  /** Watch mode for delegation */
+  watchedConversationId: () => string | null;
+  setWatchedConversationId: (id: string | null) => void;
+  watchedMessages: () => MessageWithParts[];
 }
 
 const PantheonContext = createContext<PantheonContextValue>();
@@ -109,14 +119,22 @@ export function PantheonProvider(props: { children: JSX.Element }) {
   const [isSending, setIsSending] = createSignal(false);
   const [isStreaming, setIsStreaming] = createSignal(false);
 
+  // Delegation completion tracking
+  const [delegatedFromMap, setDelegatedFromMap] = createSignal<Record<string, string>>({}); // delegated_to -> source conv id
+  const [completedDelegations, setCompletedDelegations] = createSignal<Array<{ id: string; title: string }>>([]);
+
+  // Watch mode for delegation
+  const [watchedConversationId, setWatchedConversationId] = createSignal<string | null>(null);
+  const [watchedMessages, setWatchedMessages] = createSignal<MessageWithParts[]>([]);
+
   // Per-conversation run phase tracking
-  type ConvPhase = { sending: boolean; receivedPart: boolean; receivedText: boolean };
+  type ConvPhase = { sending: boolean; delegating: boolean; receivedPart: boolean; receivedText: boolean };
   const [convPhases, setConvPhases] = createSignal<Record<string, ConvPhase>>({});
 
   function setConvPhase(convId: string, update: Partial<ConvPhase>) {
     setConvPhases((prev) => ({
       ...prev,
-      [convId]: { ...(prev[convId] ?? { sending: false, receivedPart: false, receivedText: false }), ...update },
+      [convId]: { ...(prev[convId] ?? { sending: false, delegating: false, receivedPart: false, receivedText: false }), ...update },
     }));
   }
 
@@ -128,11 +146,13 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     });
   }
 
-  const runPhase = createMemo((): "idle" | "sending" | "thinking" | "responding" => {
+  const runPhase = createMemo((): "idle" | "sending" | "thinking" | "responding" | "delegating" => {
     const convId = activeConversationId();
     if (!convId) return "idle";
     const phase = convPhases()[convId];
-    if (!phase?.sending) return "idle";
+    if (!phase) return "idle";
+    if (phase.delegating && !phase.receivedPart) return "delegating";
+    if (!phase.sending && !phase.delegating) return "idle";
     if (phase.receivedText) return "responding";
     if (phase.receivedPart) return "thinking";
     return "sending";
@@ -210,6 +230,29 @@ export function PantheonProvider(props: { children: JSX.Element }) {
 
   onCleanup(() => {
     if (pollTimer) clearInterval(pollTimer);
+  });
+
+  // ── Poll watched conversation messages ──────────────────────────────
+
+  createEffect(() => {
+    const watchId = watchedConversationId();
+    if (!watchId) {
+      setWatchedMessages([]);
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const msgs = await client.getMessages(watchId);
+        setWatchedMessages(msgs.map(toMessageWithParts));
+      } catch (e) {
+        console.error("[pantheon] watch poll error:", e);
+      }
+    };
+
+    poll(); // Initial fetch
+    const interval = setInterval(poll, 2000);
+    onCleanup(() => clearInterval(interval));
   });
 
   // ── Helpers ─────────────────────────────────────────────────────────
@@ -340,6 +383,29 @@ export function PantheonProvider(props: { children: JSX.Element }) {
       setConversations(convs);
       setAgents(ags);
       setWorkspaces(ws);
+
+      // Track delegation completions
+      const newMap: Record<string, string> = {};
+      for (const c of convs) {
+        if (c.delegated_to && c.conv_status === "delegated") {
+          newMap[c.delegated_to] = c.id;
+        }
+      }
+      const prevMap = delegatedFromMap();
+      setDelegatedFromMap(newMap);
+
+      // Check if any delegated-to conversations have completed
+      for (const delegateId of Object.keys(prevMap)) {
+        const delegate = convs.find((c: PantheonConversation) => c.id === delegateId);
+        if (delegate && delegate.conv_status === "active" && !delegate.delegated_to) {
+          setCompletedDelegations((prev) => [...prev, { id: delegateId, title: delegate.title ?? "Untitled" }]);
+          setDelegatedFromMap((prev) => {
+            const next = { ...prev };
+            delete next[delegateId];
+            return next;
+          });
+        }
+      }
     } catch (e) {
       console.error("[pantheon] failed to load data:", e);
     }
@@ -498,6 +564,10 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     }
   }
 
+  function clearCompletedDelegation(id: string) {
+    setCompletedDelegations((prev) => prev.filter((d) => d.id !== id));
+  }
+
   function logout() {
     client.clearToken();
     setUser(null);
@@ -521,6 +591,7 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     isSending,
     isStreaming,
     runPhase,
+    setConvPhase,
     setActiveConversation: setActiveConversationId,
     createConversation,
     deleteConversation,
@@ -533,7 +604,27 @@ export function PantheonProvider(props: { children: JSX.Element }) {
     createWorkspace: createWorkspaceAction,
     deleteWorkspace: deleteWorkspaceAction,
     refreshWorkspaces,
+    completedDelegations,
+    clearCompletedDelegation,
+    watchedConversationId,
+    setWatchedConversationId,
+    watchedMessages,
   };
+
+  // Expose setConvPhase to SDK-level signal so app.tsx can set delegation phase
+  setPantheonSetConvPhase(() => setConvPhase);
+
+  // Bridge completion tracking to SDK signals
+  createEffect(() => {
+    setPantheonCompletedDelegations(completedDelegations());
+  });
+  setPantheonClearCompletedDelegation(() => clearCompletedDelegation);
+
+  // Bridge watch mode to SDK signals
+  setPantheonSetWatchedConversation(() => setWatchedConversationId);
+  createEffect(() => {
+    setPantheonWatchedMessages(watchedMessages());
+  });
 
   return (
     <PantheonContext.Provider value={value}>

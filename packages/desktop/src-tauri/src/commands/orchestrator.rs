@@ -1692,6 +1692,18 @@ pub fn sandbox_workspace_logs(container_name: String, tail: u32) -> Result<Strin
     Ok(combined)
 }
 
+#[tauri::command]
+pub fn git_diff_stat(workspace_path: String) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(&["diff", "--stat"])
+        .current_dir(&workspace_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

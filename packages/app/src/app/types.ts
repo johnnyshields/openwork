@@ -64,6 +64,19 @@ export type PlaceholderAssistantMessage = {
   };
 };
 
+export type DelegationStep = {
+  key: string;
+  label: string;
+  status: "pending" | "active" | "done" | "error";
+  detail?: string | null;
+};
+
+export type DelegationProgress = {
+  startedAt: number;
+  error: string | null;
+  steps: DelegationStep[];
+};
+
 export type MessageInfo = Message | PlaceholderAssistantMessage;
 
 export type MessageWithParts = {

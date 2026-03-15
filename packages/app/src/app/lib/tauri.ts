@@ -479,6 +479,10 @@ export async function sandboxDoctor(): Promise<SandboxDoctorResult> {
   return invoke<SandboxDoctorResult>("sandbox_doctor");
 }
 
+export async function gitDiffStat(workspacePath: string): Promise<string> {
+  return invoke<string>("git_diff_stat", { workspacePath });
+}
+
 export async function sandboxStop(containerName: string): Promise<ExecResult> {
   return invoke<ExecResult>("sandbox_stop", { containerName });
 }

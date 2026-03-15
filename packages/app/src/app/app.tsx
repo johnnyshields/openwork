@@ -97,6 +97,8 @@ import type {
   OpencodeConnectStatus,
   ScheduledJob,
   WorkspacePreset,
+  DelegationProgress,
+  DelegationStep,
 } from "./types";
 import {
   clearStartupPreference,
@@ -138,7 +140,7 @@ import { createExtensionsStore } from "./context/extensions";
 import { useGlobalSync } from "./context/global-sync";
 import { useGlobalSDK } from "./context/global-sdk";
 import { isPantheonMode } from "./context/pantheon";
-import { pantheonHandover, pantheonDelegate, pantheonClientRef } from "./context/pantheon-sdk";
+import { pantheonHandover, pantheonDelegate, pantheonClientRef, pantheonSetConvPhase, pantheonCompletedDelegations, pantheonClearCompletedDelegation, pantheonSetWatchedConversation, pantheonWatchedMessages } from "./context/pantheon-sdk";
 import { createWorkspaceStore } from "./context/workspace";
 import {
   updaterEnvironment,
@@ -611,6 +613,12 @@ export default function App() {
 
   const [creatingSession, setCreatingSession] = createSignal(false);
   const [sessionViewLockUntil, setSessionViewLockUntil] = createSignal(0);
+
+  // Delegation progress signals
+  const [delegationProgress, setDelegationProgress] = createSignal<DelegationProgress | null>(null);
+  const [delegationChanges, setDelegationChanges] = createSignal<string | null>(null);
+  const [notificationPermissionRequested, setNotificationPermissionRequested] = createSignal(false);
+  const [delegationCompletionToast, setDelegationCompletionToast] = createSignal<{ id: string; title: string } | null>(null);
   const currentView = createMemo<View>(() => {
     const path = location.pathname.toLowerCase();
     if (path.startsWith("/onboarding")) return "onboarding";
@@ -2643,6 +2651,31 @@ export default function App() {
         setSseConnected(true);
       }
     });
+  }
+
+  // Delegation completion notifications
+  if (isPantheonMode()) {
+    createEffect(() => {
+      const completed = pantheonCompletedDelegations();
+      if (completed.length === 0) return;
+      const latest = completed[completed.length - 1];
+      setDelegationCompletionToast(latest);
+
+      // Browser notification + tab title if tab is hidden
+      if (document.hidden) {
+        import("./lib/delegation-notifications").then(m => {
+          m.showDesktopNotification("Pixie finished", latest.title, () => selectSession(latest.id));
+          m.setTabTitleAlert("Pixie done — OpenWork");
+        }).catch(() => {});
+      }
+    });
+
+    // Reset tab title on focus
+    const handleFocus = () => {
+      import("./lib/delegation-notifications").then(m => m.resetTabTitle()).catch(() => {});
+    };
+    window.addEventListener("focus", handleFocus);
+    onCleanup(() => window.removeEventListener("focus", handleFocus));
   }
 
   type SidebarWorkspaceSessionsStatus = WorkspaceSessionGroup["status"];
@@ -6315,41 +6348,171 @@ export default function App() {
       const pc = pantheonClientRef();
       if (!fn || !pc) return;
 
-      let pixieId: string | undefined;
-
-      // For remote delegation in Tauri: ensure workspace + container are ready
-      if (mode === "remote" && isTauriRuntime()) {
-        try {
-          const wsId = workspaceStore.activeWorkspaceId().trim();
-          const wsRoot = workspaceStore.activeWorkspaceRoot().trim();
-          if (wsId && wsRoot) {
-            // Get workspace pixie for container auth
-            const pixie = await pc.getWorkspacePixie(wsId);
-            pixieId = pixie.id;
-
-            // Ensure container is running
-            const { sandboxCreateWorkspace, sandboxWorkspaceStatus } = await import("./lib/tauri");
-            const containerName = `openwork-workspace-${wsId.slice(0, 8)}`;
-            let status = "unknown";
-            try { status = await sandboxWorkspaceStatus(containerName); } catch { /* not found */ }
-            if (status !== "running") {
-              const pantheonUrl = (import.meta.env?.VITE_OPENWORK_URL as string) ?? "";
-              await sandboxCreateWorkspace(wsRoot, pantheonUrl, pixie.nightshift_api_key);
-            }
-          }
-        } catch (e) {
-          console.error("[delegate] workspace/container setup failed:", e);
-          // Continue without container — delegation still works at API level
-        }
+      // Request notification permission on first delegation
+      if (!notificationPermissionRequested()) {
+        setNotificationPermissionRequested(true);
+        import("./lib/delegation-notifications").then(m => m.requestNotificationPermission()).catch(() => {});
       }
 
-      const result = await fn(sessionId, mode, pixieId);
-      // Refresh sidebar sessions to reflect delegation
+      let pixieId: string | undefined;
+      const isTauri = isTauriRuntime();
       const wsId = workspaceStore.activeWorkspaceId().trim();
-      if (wsId) refreshSidebarWorkspaceSessions(wsId);
-      // Navigate to the new delegate conversation
-      if (result?.delegate?.id) {
-        selectSession(result.delegate.id);
+      const wsRoot = workspaceStore.activeWorkspaceRoot().trim();
+
+      // Helper to update a step in the progress
+      function updateStep(key: string, update: Partial<DelegationStep>) {
+        setDelegationProgress(prev => prev ? {
+          ...prev,
+          steps: prev.steps.map(s => s.key === key ? { ...s, ...update } : s),
+          error: update.status === "error" ? (update.detail ?? prev.error) : prev.error,
+        } : null);
+      }
+
+      // For remote delegation: show progress overlay
+      if (mode === "remote") {
+        const steps: DelegationStep[] = [
+          { key: "workspace", label: "Preparing workspace", status: "pending" },
+          { key: "container", label: "Starting container", status: isTauri ? "pending" : "done", detail: isTauri ? null : "Skipped (browser)" },
+          { key: "clone", label: "Cloning conversation", status: "pending" },
+          { key: "connect", label: "Connecting Pixie", status: "pending" },
+        ];
+        setDelegationProgress({ startedAt: Date.now(), error: null, steps });
+
+        try {
+          // Step 1: Prepare workspace — get pixie credentials
+          updateStep("workspace", { status: "active" });
+          if (isTauri && wsId) {
+            try {
+              const pixie = await pc.getWorkspacePixie(wsId);
+              pixieId = pixie.id;
+              updateStep("workspace", { status: "done", label: "Workspace ready" });
+            } catch (e) {
+              updateStep("workspace", { status: "error", detail: String(e instanceof Error ? e.message : e) });
+              return; // Can't proceed without pixie credentials
+            }
+          } else {
+            updateStep("workspace", { status: "done", label: "Workspace ready", detail: "No container needed" });
+          }
+
+          // Step 2: Start container (Tauri only)
+          if (isTauri && wsId && wsRoot) {
+            updateStep("container", { status: "active" });
+            try {
+              const { sandboxDoctor, sandboxCreateWorkspace, sandboxWorkspaceStatus } = await import("./lib/tauri");
+
+              // Pre-flight Docker check
+              try {
+                const doctor = await sandboxDoctor();
+                if (!doctor.ready) {
+                  updateStep("container", { status: "error", detail: "Docker is required for delegation. Install Docker or click Continue Anyway." });
+                  return;
+                }
+              } catch {
+                // sandboxDoctor not available, skip check
+              }
+
+              const containerName = `openwork-workspace-${wsId.slice(0, 8)}`;
+              let containerStatus = "unknown";
+              try { containerStatus = await sandboxWorkspaceStatus(containerName); } catch { /* not found */ }
+
+              if (containerStatus !== "running") {
+                // Listen for Tauri progress events
+                let unlisten: (() => void) | null = null;
+                try {
+                  const { listen } = await import("@tauri-apps/api/event");
+                  unlisten = await listen("openwork://sandbox-create-progress", (event: any) => {
+                    const msg = String(event.payload?.message ?? "").trim();
+                    if (msg) updateStep("container", { detail: msg });
+                  });
+                } catch { /* listen not available */ }
+
+                try {
+                  const pantheonUrl = (import.meta.env?.VITE_OPENWORK_URL as string) ?? "";
+                  await sandboxCreateWorkspace(wsRoot, pantheonUrl, (await pc.getWorkspacePixie(wsId)).nightshift_api_key);
+                } finally {
+                  unlisten?.();
+                }
+              }
+              updateStep("container", { status: "done", label: "Container running" });
+            } catch (e) {
+              console.error("[delegate] container setup failed:", e);
+              updateStep("container", { status: "error", detail: String(e instanceof Error ? e.message : e) });
+              // Don't return — user can "Continue Anyway" or we fall through
+              return;
+            }
+          }
+
+          // Step 3: Clone conversation
+          updateStep("clone", { status: "active" });
+          let result: any;
+          try {
+            result = await fn(sessionId, mode, pixieId);
+            updateStep("clone", { status: "done", label: "Conversation cloned" });
+          } catch (e) {
+            updateStep("clone", { status: "error", detail: String(e instanceof Error ? e.message : e) });
+            return;
+          }
+
+          // Refresh sidebar
+          if (wsId) refreshSidebarWorkspaceSessions(wsId);
+
+          // Step 4: Connect — wait for Pixie to pick up
+          const delegateId = result?.delegate?.id;
+          if (delegateId) {
+            updateStep("connect", { status: "active" });
+
+            // Navigate to delegate conversation
+            selectSession(delegateId);
+
+            // Set delegating phase so the conversation shows "Pixie is connecting..."
+            const setPhase = pantheonSetConvPhase();
+            if (setPhase) {
+              setPhase(delegateId, { sending: false, delegating: true, receivedPart: false, receivedText: false });
+            }
+
+            // Poll for first assistant message (up to 60s)
+            let connected = false;
+            const deadline = Date.now() + 60_000;
+            while (Date.now() < deadline && !connected) {
+              await new Promise(r => setTimeout(r, 2000));
+              try {
+                const msgs = await pc.getMessages(delegateId);
+                if (msgs.some((m: any) => m.role === "assistant")) {
+                  connected = true;
+                }
+              } catch { /* keep polling */ }
+            }
+
+            if (connected) {
+              updateStep("connect", { status: "done", label: "Pixie connected" });
+            } else {
+              updateStep("connect", { status: "error", detail: "Pixie hasn't responded yet. The conversation was delegated — Pixie may still pick it up." });
+              return;
+            }
+          }
+
+          // All done — dismiss overlay
+          setDelegationProgress(null);
+        } catch (e) {
+          console.error("[delegate] unexpected error:", e);
+          setDelegationProgress(prev => prev ? { ...prev, error: String(e instanceof Error ? e.message : e) } : null);
+        }
+      } else {
+        // Take-back locally (mode === "local")
+        const result = await fn(sessionId, mode, pixieId);
+        if (wsId) refreshSidebarWorkspaceSessions(wsId);
+        if (result?.delegate?.id) {
+          selectSession(result.delegate.id);
+        }
+
+        // Show "What Changed" banner if Tauri
+        if (isTauri && wsRoot) {
+          try {
+            const { gitDiffStat } = await import("./lib/tauri");
+            const stat = await gitDiffStat(wsRoot);
+            if (stat.trim()) setDelegationChanges(stat);
+          } catch { /* gitDiffStat not available */ }
+        }
       }
     } : undefined,
     onTryNotionPrompt: () => {
@@ -6365,6 +6528,57 @@ export default function App() {
     sessionStatus: selectedSessionStatus(),
     renameSession: renameSessionTitle,
     error: error(),
+    delegationProgress: delegationProgress(),
+    delegationChanges: delegationChanges(),
+    onDismissDelegationChanges: () => setDelegationChanges(null),
+    onCancelDelegation: () => setDelegationProgress(null),
+    onRetryDelegation: () => {
+      // Reset error steps to pending and re-trigger
+      setDelegationProgress(prev => prev ? {
+        ...prev,
+        error: null,
+        steps: prev.steps.map(s => s.status === "error" ? { ...s, status: "pending" as const, detail: null } : s),
+      } : null);
+    },
+    onContinueAnywayDelegation: () => {
+      // Mark error steps as done and continue
+      setDelegationProgress(prev => prev ? {
+        ...prev,
+        error: null,
+        steps: prev.steps.map(s => s.status === "error" ? { ...s, status: "done" as const, detail: "Skipped" } : s),
+      } : null);
+    },
+    delegationCompletionToast: delegationCompletionToast(),
+    onViewDelegationCompletion: (id: string) => {
+      setDelegationCompletionToast(null);
+      const clear = pantheonClearCompletedDelegation();
+      if (clear) clear(id);
+      selectSession(id);
+    },
+    onDismissDelegationCompletion: () => {
+      const toast = delegationCompletionToast();
+      if (toast) {
+        const clear = pantheonClearCompletedDelegation();
+        if (clear) clear(toast.id);
+      }
+      setDelegationCompletionToast(null);
+    },
+    // Watch mode
+    onStartWatch: (conversationId: string) => {
+      const setWatch = pantheonSetWatchedConversation();
+      if (setWatch) setWatch(conversationId);
+    },
+    onStopWatch: () => {
+      const setWatch = pantheonSetWatchedConversation();
+      if (setWatch) setWatch(null);
+    },
+    watchedMessages: pantheonWatchedMessages(),
+    watchRunPhase: "idle", // Watch doesn't have its own runPhase, defaults to idle
+    getDelegationContext: isPantheonMode() ? async (conversationId: string) => {
+      const pc = pantheonClientRef();
+      if (!pc) return null;
+      return pc.getDelegationContext(conversationId);
+    } : undefined,
   });
 
   const dashboardTabs = new Set<DashboardTab>([

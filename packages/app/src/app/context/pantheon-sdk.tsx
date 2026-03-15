@@ -60,6 +60,24 @@ export { pantheonDelegate };
 const [pantheonClientRef, setPantheonClientRef] = createSignal<ReturnType<typeof createPantheonClient> | null>(null);
 export { pantheonClientRef };
 
+// Expose setConvPhase for delegation progress (set from app.tsx after navigating to delegate conv)
+type SetConvPhaseFn = (convId: string, update: Partial<{ sending: boolean; delegating: boolean; receivedPart: boolean; receivedText: boolean }>) => void;
+const [pantheonSetConvPhase, setPantheonSetConvPhase] = createSignal<SetConvPhaseFn | null>(null);
+export { pantheonSetConvPhase, setPantheonSetConvPhase };
+
+// Expose completedDelegations for notification system (set from PantheonProvider)
+type CompletedDelegation = { id: string; title: string };
+const [pantheonCompletedDelegations, setPantheonCompletedDelegations] = createSignal<CompletedDelegation[]>([]);
+const [pantheonClearCompletedDelegation, setPantheonClearCompletedDelegation] = createSignal<((id: string) => void) | null>(null);
+export { pantheonCompletedDelegations, setPantheonCompletedDelegations, pantheonClearCompletedDelegation, setPantheonClearCompletedDelegation };
+
+// Watch mode signals
+import type { MessageWithParts } from "../types";
+type SetWatchFn = (id: string | null) => void;
+const [pantheonSetWatchedConversation, setPantheonSetWatchedConversation] = createSignal<SetWatchFn | null>(null);
+const [pantheonWatchedMessages, setPantheonWatchedMessages] = createSignal<MessageWithParts[]>([]);
+export { pantheonSetWatchedConversation, setPantheonSetWatchedConversation, pantheonWatchedMessages, setPantheonWatchedMessages };
+
 export function PantheonSDKProvider(props: ParentProps) {
   const [healthy, setHealthy] = createSignal<boolean | undefined>(undefined);
   const [loginState, setLoginState] = createSignal<"pending" | "ok" | "error">("pending");

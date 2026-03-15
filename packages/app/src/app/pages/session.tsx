@@ -18,6 +18,7 @@ import type {
   WorkspaceConnectionState,
   WorkspaceDisplay,
   WorkspaceSessionGroup,
+  DelegationProgress,
 } from "../types";
 
 import {
@@ -60,6 +61,10 @@ import RenameSessionModal from "../components/rename-session-modal";
 import ProviderAuthModal, { type ProviderOAuthStartResult } from "../components/provider-auth-modal";
 import ShareWorkspaceModal from "../components/share-workspace-modal";
 import StatusBar from "../components/status-bar";
+import DelegationProgressOverlay from "../components/delegation-progress-overlay";
+import DelegationChangesBanner from "../components/delegation-changes-banner";
+import DelegationCompletionToast from "../components/delegation-completion-toast";
+import DelegationContextPanel from "../components/delegation-context-panel";
 import {
   buildOpenworkConnectInviteUrl,
   buildOpenworkWorkspaceBaseUrl,
@@ -241,6 +246,21 @@ export type SessionViewProps = {
   deleteSession: (sessionId: string) => Promise<void>;
   onHandover?: (sessionId: string, mode: "local" | "remote") => Promise<void>;
   onDelegate?: (sessionId: string, mode: "local" | "remote") => Promise<void>;
+  delegationProgress?: DelegationProgress | null;
+  delegationChanges?: string | null;
+  onDismissDelegationChanges?: () => void;
+  onCancelDelegation?: () => void;
+  onRetryDelegation?: () => void;
+  onContinueAnywayDelegation?: () => void;
+  delegationCompletionToast?: { id: string; title: string } | null;
+  onViewDelegationCompletion?: (id: string) => void;
+  onDismissDelegationCompletion?: () => void;
+  // Context panel + watch mode
+  onStartWatch?: (conversationId: string) => void;
+  onStopWatch?: () => void;
+  watchedMessages?: MessageWithParts[];
+  watchRunPhase?: string;
+  getDelegationContext?: (conversationId: string) => Promise<any>;
 };
 
 type SharedSkillItem = {
@@ -314,6 +334,9 @@ export default function SessionView(props: SessionViewProps) {
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
   const [providerAuthActionBusy, setProviderAuthActionBusy] = createSignal(false);
   const [renameModalOpen, setRenameModalOpen] = createSignal(false);
+  const [showDelegationPanel, setShowDelegationPanel] = createSignal(false);
+  const [delegationContext, setDelegationContext] = createSignal<any>(null);
+  const [isWatching, setIsWatching] = createSignal(false);
   const [renameTitle, setRenameTitle] = createSignal("");
   const [renameBusy, setRenameBusy] = createSignal(false);
 
@@ -1671,8 +1694,10 @@ export default function SessionView(props: SessionViewProps) {
     return snapshot.id === baseline.assistantId && snapshot.partCount > baseline.partCount;
   });
 
-  const runPhase = createMemo(() => {
+  const runPhase = createMemo((): "idle" | "sending" | "thinking" | "responding" | "retrying" | "error" | "delegating" => {
     if (props.error && (runStartedAt() !== null || runHasBegun())) return "error";
+    // Check for delegating state from delegation progress
+    if (props.delegationProgress && !props.delegationProgress.error) return "delegating";
     const status = props.sessionStatus;
     const started = runStartedAt() !== null;
     if (status === "idle") {
@@ -1808,6 +1833,8 @@ export default function SessionView(props: SessionViewProps) {
         return "Responding";
       case "thinking":
         return "Thinking";
+      case "delegating":
+        return "Pixie is connecting...";
       case "error":
         return "Run failed";
       default:
@@ -3335,6 +3362,62 @@ export default function SessionView(props: SessionViewProps) {
 
   return (
     <div class="flex h-screen w-full bg-dls-sidebar text-gray-12 font-sans overflow-hidden">
+      {/* Delegation progress overlay */}
+      <Show when={props.delegationProgress}>
+        {(progress) => (
+          <DelegationProgressOverlay
+            progress={progress()}
+            onCancel={() => props.onCancelDelegation?.()}
+            onRetry={() => props.onRetryDelegation?.()}
+            onContinueAnyway={() => props.onContinueAnywayDelegation?.()}
+            onKeepWaiting={() => {/* extend timeout — overlay stays open */}}
+            onViewConversation={() => props.onCancelDelegation?.()}
+          />
+        )}
+      </Show>
+      {/* Delegation changes banner (take-back) */}
+      <Show when={props.delegationChanges}>
+        {(stat) => (
+          <DelegationChangesBanner stat={stat()} onDismiss={() => props.onDismissDelegationChanges?.()} />
+        )}
+      </Show>
+      {/* Delegation completion toast */}
+      <Show when={props.delegationCompletionToast}>
+        {(toast) => (
+          <DelegationCompletionToast
+            open={true}
+            title={toast().title}
+            onView={() => props.onViewDelegationCompletion?.(toast().id)}
+            onDismiss={() => props.onDismissDelegationCompletion?.()}
+          />
+        )}
+      </Show>
+      {/* Delegation context + watch panel */}
+      <DelegationContextPanel
+        open={showDelegationPanel()}
+        onClose={() => {
+          setShowDelegationPanel(false);
+          if (isWatching()) {
+            setIsWatching(false);
+            props.onStopWatch?.();
+          }
+        }}
+        context={delegationContext()}
+        watchedMessages={props.watchedMessages ?? []}
+        watchRunPhase={props.watchRunPhase ?? "idle"}
+        onStartWatch={() => {
+          const delegateId = selectedSessionItem()?.delegated_to;
+          if (delegateId) {
+            setIsWatching(true);
+            props.onStartWatch?.(delegateId);
+          }
+        }}
+        onStopWatch={() => {
+          setIsWatching(false);
+          props.onStopWatch?.();
+        }}
+        isWatching={isWatching()}
+      />
       <aside
         class="relative hidden lg:flex shrink-0 flex-col bg-dls-sidebar border-r border-gray-6/70 p-3 pt-5"
         style={{
@@ -3493,6 +3576,24 @@ export default function SessionView(props: SessionViewProps) {
                       }}
                     >
                       Continued →
+                    </button>
+                    <button
+                      type="button"
+                      class="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-3 text-violet-11 hover:bg-violet-4 transition-colors"
+                      onClick={async () => {
+                        const delegateId = selectedSessionItem()?.delegated_to;
+                        if (!delegateId) return;
+                        // Fetch delegation context
+                        if (props.getDelegationContext) {
+                          try {
+                            const ctx = await props.getDelegationContext(props.selectedSessionId!);
+                            setDelegationContext(ctx);
+                          } catch { /* ignore */ }
+                        }
+                        setShowDelegationPanel(true);
+                      }}
+                    >
+                      Watch Pixie
                     </button>
                   </Show>
                 </div>
