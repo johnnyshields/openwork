@@ -41,6 +41,7 @@ export interface PantheonMessage {
 }
 
 export type PantheonStreamEvent =
+  | { type: "user_message"; message_id: string; content: string; created_at?: string }
   | { type: "part"; message_id: string; part: any }
   | { type: "message"; id: string; content: string; role: string; model?: string }
   | { type: "done"; message_id: string }

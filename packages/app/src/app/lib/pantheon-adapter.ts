@@ -208,68 +208,65 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
         return wrap({});
       }
 
-      // Emit user message so it appears in the chat immediately.
-      // Generate a hex-timestamp ID that sorts chronologically via localeCompare,
-      // matching the format used for assistant messages below.
-      const ts = Math.floor(Date.now() / 1000).toString(16).padStart(8, "0");
-      const rand = Math.random().toString(16).slice(2, 18).padStart(16, "0");
-      const userMsgId = `${ts}${rand}`;
-      eventQueue.push({
-        type: "message.updated",
-        properties: {
-          info: {
-            id: userMsgId,
-            sessionID,
-            role: "user",
-            time: { created: Date.now() },
-          },
-        },
-      });
-      eventQueue.push({
-        type: "message.part.updated",
-        properties: {
-          part: {
-            type: "text",
-            id: `${userMsgId}-text`,
-            sessionID,
-            messageID: userMsgId,
-            text,
-          },
-        },
-      });
-
       // Push responding status before streaming begins
       eventQueue.push({
         type: "session.status",
         properties: { sessionID, status: { type: "busy" } },
       });
 
-      // Fire-and-forget the streaming call; events flow through eventQueue
+      // Track IDs from the server (set when user_message / first part arrive)
+      let userMsgId: string | null = null;
+      let assistantMsgId: string | null = null;
       let assistantInfoEmitted = false;
-      // Pre-generate assistant message ID in same hex format so it sorts after user msg
-      const aTs = Math.floor(Date.now() / 1000 + 1).toString(16).padStart(8, "0");
-      const aRand = Math.random().toString(16).slice(2, 18).padStart(16, "0");
-      const assistantMsgId = `${aTs}${aRand}`;
 
       pantheonClient
         .sendMessageStreaming(sessionID, text, undefined, {
           model,
           onEvent: (evt: PantheonStreamEvent) => {
-            if (evt.type === "part") {
-              // Use our generated ID (not the Anthropic msg_* ID) for consistent sorting
-              const messageID = assistantMsgId;
+            // Server sends user_message with persisted MongoDB ID before streaming
+            if (evt.type === "user_message") {
+              userMsgId = (evt as any).message_id;
+              eventQueue.push({
+                type: "message.updated",
+                properties: {
+                  info: {
+                    id: userMsgId,
+                    sessionID,
+                    role: "user",
+                    time: { created: (evt as any).created_at ? new Date((evt as any).created_at).getTime() : Date.now() },
+                  },
+                },
+              });
+              eventQueue.push({
+                type: "message.part.updated",
+                properties: {
+                  part: {
+                    type: "text",
+                    id: `${userMsgId}-text`,
+                    sessionID,
+                    messageID: userMsgId,
+                    text,
+                  },
+                },
+              });
+              return;
+            }
 
-              // Emit assistant message info on first part (so the UI has a container)
+            if (evt.type === "part") {
+              const serverMsgId = (evt as any).message_id;
+
+              // Emit assistant message info on first part
               if (!assistantInfoEmitted) {
                 assistantInfoEmitted = true;
+                assistantMsgId = serverMsgId;
                 eventQueue.push({
                   type: "message.updated",
                   properties: {
                     info: {
-                      id: messageID,
+                      id: assistantMsgId,
                       sessionID,
                       role: "assistant",
-                      parentID: userMsgId,
+                      parentID: userMsgId ?? "",
                       modelID: model ?? "",
                       providerID: "",
                       mode: "",
@@ -291,13 +288,37 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
               const part = {
                 ...(evt as any).part,
                 sessionID,
-                messageID,
+                messageID: assistantMsgId,
               };
               eventQueue.push({
                 type: "message.part.updated",
                 properties: { part },
               });
             } else if (evt.type === "done") {
+              // Update assistant message ID to the persisted one from the server
+              const persistedId = (evt as any).message_id;
+              if (persistedId && assistantMsgId && persistedId !== assistantMsgId) {
+                // Re-emit with the final persisted ID so it matches on reload
+                eventQueue.push({
+                  type: "message.updated",
+                  properties: {
+                    info: {
+                      id: persistedId,
+                      sessionID,
+                      role: "assistant",
+                      parentID: userMsgId ?? "",
+                      modelID: model ?? "",
+                      providerID: "",
+                      mode: "",
+                      agent: "",
+                      path: { cwd: "", root: "" },
+                      cost: 0,
+                      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                      time: { created: Date.now() },
+                    },
+                  },
+                });
+              }
               eventQueue.push({
                 type: "session.status",
                 properties: { sessionID, status: { type: "idle" } },
