@@ -451,7 +451,7 @@ export function createWorkspaceStore(options: {
 
     try {
       const health = await client.health();
-      if (!health?.ok && (health as any)?.status !== "healthy") {
+      if (!health?.ok) {
         return { kind: "fallback" as const };
       }
     } catch (error) {
