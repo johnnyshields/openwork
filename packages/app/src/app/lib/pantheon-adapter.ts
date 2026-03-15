@@ -137,6 +137,8 @@ function createEventQueue() {
 
 export function createPantheonAdapter(pantheonClient: PantheonClient) {
   const eventQueue = createEventQueue();
+  // Active AbortController per session (for cancelling in-flight prompts)
+  const activeAbort = new Map<string, AbortController>();
 
   // ── Live methods ────────────────────────────────────────────────────
 
@@ -214,6 +216,10 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
         properties: { sessionID, status: { type: "busy" } },
       });
 
+      // Set up abort controller for this session
+      const abortController = new AbortController();
+      activeAbort.set(sessionID, abortController);
+
       // Track IDs from the server (set when user_message / first part arrive)
       let userMsgId: string | null = null;
       let assistantMsgId: string | null = null;
@@ -222,6 +228,7 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       pantheonClient
         .sendMessageStreaming(sessionID, text, undefined, {
           model,
+          signal: abortController.signal,
           onEvent: (evt: PantheonStreamEvent) => {
             // Server sends user_message with persisted MongoDB ID before streaming
             if (evt.type === "user_message") {
@@ -319,6 +326,7 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
                   },
                 });
               }
+              activeAbort.delete(sessionID);
               eventQueue.push({
                 type: "session.status",
                 properties: { sessionID, status: { type: "idle" } },
@@ -342,19 +350,27 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
           },
         })
         .catch((err: any) => {
-          eventQueue.push({
-            type: "session.error",
-            properties: {
-              sessionID,
-              error: {
-                name: "UnknownError" as const,
-                data: { message: err?.message ?? String(err) },
+          activeAbort.delete(sessionID);
+          // Don't emit error for intentional abort
+          if (err?.name !== "AbortError") {
+            eventQueue.push({
+              type: "session.error",
+              properties: {
+                sessionID,
+                error: {
+                  name: "UnknownError" as const,
+                  data: { message: err?.message ?? String(err) },
+                },
               },
-            },
-          });
+            });
+          }
           eventQueue.push({
             type: "session.status",
             properties: { sessionID, status: { type: "idle" } },
+          });
+          eventQueue.push({
+            type: "session.idle",
+            properties: { sessionID },
           });
         });
 
@@ -366,7 +382,17 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       return session.prompt(opts);
     },
 
-    abort: async () => wrap({}),
+    abort: async (opts?: any) => {
+      const sessionID = opts?.sessionID ?? opts?.path?.id;
+      if (sessionID) {
+        const controller = activeAbort.get(sessionID);
+        if (controller) {
+          controller.abort();
+          activeAbort.delete(sessionID);
+        }
+      }
+      return wrap({});
+    },
     todo: async () => wrap([]),
     revert: async () => wrap({}),
     unrevert: async () => wrap({}),
