@@ -24,6 +24,9 @@ export interface PantheonConversation {
   provider: string;
   system_prompt: string | null;
   mode: "local" | "remote";
+  delegated_from: string | null;
+  delegated_to: string | null;
+  conv_status: "active" | "delegated";
   created_at: string;
   updated_at: string;
 }
@@ -468,6 +471,31 @@ export function createPantheonClient(baseUrl: string) {
     );
   }
 
+  async function delegateConversation(
+    conversationId: string,
+    mode: "local" | "remote",
+    pixieId?: string,
+  ): Promise<{ source: PantheonConversation; delegate: PantheonConversation }> {
+    return request<{ source: PantheonConversation; delegate: PantheonConversation }>(
+      `/backend/conversations/${conversationId}/delegate`,
+      { method: "POST", body: JSON.stringify({ mode, pixie_id: pixieId }) },
+    );
+  }
+
+  async function getWorkspacePixie(
+    workspaceId: string,
+  ): Promise<{ id: string; nightshift_api_key: string }> {
+    return request<{ id: string; nightshift_api_key: string }>(
+      `/backend/workspaces/${workspaceId}/pixie`,
+    );
+  }
+
+  async function getDelegationContext(conversationId: string): Promise<any> {
+    return request<any>(
+      `/backend/conversations/${conversationId}/delegation-context`,
+    );
+  }
+
   return {
     getToken,
     isLoggedIn,
@@ -491,6 +519,9 @@ export function createPantheonClient(baseUrl: string) {
     deleteWorkspace,
     postLocalPartEvent,
     handoverConversation,
+    delegateConversation,
+    getWorkspacePixie,
+    getDelegationContext,
   };
 }
 

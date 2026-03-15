@@ -240,6 +240,7 @@ export type SessionViewProps = {
   loadEarlierMessages: (sessionId: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
   onHandover?: (sessionId: string, mode: "local" | "remote") => Promise<void>;
+  onDelegate?: (sessionId: string, mode: "local" | "remote") => Promise<void>;
 };
 
 type SharedSkillItem = {
@@ -2399,6 +2400,15 @@ export default function SessionView(props: SessionViewProps) {
     }
     return null;
   });
+  const selectedSessionItem = createMemo(() => {
+    const id = props.selectedSessionId;
+    if (!id) return null;
+    for (const group of props.workspaceSessionGroups) {
+      const match = group.sessions.find((session) => session.id === id);
+      if (match) return match;
+    }
+    return null;
+  });
   const hasWorkspaceConfigured = createMemo(() => props.workspaces.length > 0);
   const showWorkspaceSetupEmptyState = createMemo(
     () => !hasWorkspaceConfigured() && !props.selectedSessionId && props.messages.length === 0,
@@ -3443,22 +3453,46 @@ export default function SessionView(props: SessionViewProps) {
                     )}
                     {mode() === "local" ? "Local" : "Remote"}
                   </span>
-                  <Show when={props.onHandover && mode() === "local"}>
+                  <Show when={props.onDelegate && mode() === "local"}>
                     <button
                       type="button"
                       class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
-                      onClick={() => props.selectedSessionId && props.onHandover?.(props.selectedSessionId, "remote")}
+                      onClick={() => props.selectedSessionId && props.onDelegate?.(props.selectedSessionId, "remote")}
                     >
-                      Hand to Pixie →
+                      Delegate to Pixie →
                     </button>
                   </Show>
-                  <Show when={props.onHandover && mode() === "remote" && isTauriRuntime()}>
+                  <Show when={props.onDelegate && mode() === "remote" && isTauriRuntime()}>
                     <button
                       type="button"
                       class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
-                      onClick={() => props.selectedSessionId && props.onHandover?.(props.selectedSessionId, "local")}
+                      onClick={() => props.selectedSessionId && props.onDelegate?.(props.selectedSessionId, "local")}
                     >
-                      ← Take Local
+                      ← Take Back Locally
+                    </button>
+                  </Show>
+                  <Show when={selectedSessionItem()?.delegated_from}>
+                    <button
+                      type="button"
+                      class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
+                      onClick={() => {
+                        const from = selectedSessionItem()?.delegated_from;
+                        if (from) props.selectSession(from);
+                      }}
+                    >
+                      ← From previous
+                    </button>
+                  </Show>
+                  <Show when={selectedSessionItem()?.delegated_to}>
+                    <button
+                      type="button"
+                      class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
+                      onClick={() => {
+                        const to = selectedSessionItem()?.delegated_to;
+                        if (to) props.selectSession(to);
+                      }}
+                    >
+                      Continued →
                     </button>
                   </Show>
                 </div>

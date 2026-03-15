@@ -23,6 +23,9 @@ export type SidebarSessionItem = {
   };
   directory?: string | null;
   mode?: "local" | "remote" | null;
+  delegated_from?: string | null;
+  delegated_to?: string | null;
+  conv_status?: "active" | "delegated" | null;
 };
 
 export type WorkspaceSessionGroup = {

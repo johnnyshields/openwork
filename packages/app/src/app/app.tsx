@@ -138,7 +138,7 @@ import { createExtensionsStore } from "./context/extensions";
 import { useGlobalSync } from "./context/global-sync";
 import { useGlobalSDK } from "./context/global-sdk";
 import { isPantheonMode } from "./context/pantheon";
-import { pantheonHandover } from "./context/pantheon-sdk";
+import { pantheonHandover, pantheonDelegate, pantheonClientRef } from "./context/pantheon-sdk";
 import { createWorkspaceStore } from "./context/workspace";
 import {
   updaterEnvironment,
@@ -6309,6 +6309,48 @@ export default function App() {
       // Refresh sidebar sessions to reflect mode change
       const wsId = workspaceStore.activeWorkspaceId().trim();
       if (wsId) refreshSidebarWorkspaceSessions(wsId);
+    } : undefined,
+    onDelegate: isPantheonMode() ? async (sessionId: string, mode: "local" | "remote") => {
+      const fn = pantheonDelegate();
+      const pc = pantheonClientRef();
+      if (!fn || !pc) return;
+
+      let pixieId: string | undefined;
+
+      // For remote delegation in Tauri: ensure workspace + container are ready
+      if (mode === "remote" && isTauriRuntime()) {
+        try {
+          const wsId = workspaceStore.activeWorkspaceId().trim();
+          const wsRoot = workspaceStore.activeWorkspaceRoot().trim();
+          if (wsId && wsRoot) {
+            // Get workspace pixie for container auth
+            const pixie = await pc.getWorkspacePixie(wsId);
+            pixieId = pixie.id;
+
+            // Ensure container is running
+            const { sandboxCreateWorkspace, sandboxWorkspaceStatus } = await import("./lib/tauri");
+            const containerName = `openwork-workspace-${wsId.slice(0, 8)}`;
+            let status = "unknown";
+            try { status = await sandboxWorkspaceStatus(containerName); } catch { /* not found */ }
+            if (status !== "running") {
+              const pantheonUrl = (import.meta.env?.VITE_OPENWORK_URL as string) ?? "";
+              await sandboxCreateWorkspace(wsRoot, pantheonUrl, pixie.nightshift_api_key);
+            }
+          }
+        } catch (e) {
+          console.error("[delegate] workspace/container setup failed:", e);
+          // Continue without container — delegation still works at API level
+        }
+      }
+
+      const result = await fn(sessionId, mode, pixieId);
+      // Refresh sidebar sessions to reflect delegation
+      const wsId = workspaceStore.activeWorkspaceId().trim();
+      if (wsId) refreshSidebarWorkspaceSessions(wsId);
+      // Navigate to the new delegate conversation
+      if (result?.delegate?.id) {
+        selectSession(result.delegate.id);
+      }
     } : undefined,
     onTryNotionPrompt: () => {
       setPrompt("setup my crm");

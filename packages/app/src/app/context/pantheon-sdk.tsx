@@ -52,6 +52,14 @@ type HandoverFn = (sessionID: string, mode: "local" | "remote") => Promise<any>;
 const [pantheonHandover, setPantheonHandover] = createSignal<HandoverFn | null>(null);
 export { pantheonHandover };
 
+type DelegateFn = (sessionID: string, mode: "local" | "remote", pixieId?: string) => Promise<any>;
+const [pantheonDelegate, setPantheonDelegate] = createSignal<DelegateFn | null>(null);
+export { pantheonDelegate };
+
+// Expose PantheonClient for delegation orchestration (workspace + container lifecycle)
+const [pantheonClientRef, setPantheonClientRef] = createSignal<ReturnType<typeof createPantheonClient> | null>(null);
+export { pantheonClientRef };
+
 export function PantheonSDKProvider(props: ParentProps) {
   const [healthy, setHealthy] = createSignal<boolean | undefined>(undefined);
   const [loginState, setLoginState] = createSignal<"pending" | "ok" | "error">("pending");
@@ -127,9 +135,11 @@ export function PantheonSDKProvider(props: ParentProps) {
   // ── Main login flow ─────────────────────────────────────────────────
 
   function completeLogin() {
-    const { client: adapter, handover } = createPantheonAdapter(client);
+    const { client: adapter, handover, delegate } = createPantheonAdapter(client);
     setAdapterClient(adapter as any);
     setPantheonHandover(() => handover);
+    setPantheonDelegate(() => delegate);
+    setPantheonClientRef(client);
     setHealthy(true);
     setLoginState("ok");
   }

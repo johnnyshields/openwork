@@ -135,7 +135,7 @@ function Sidebar() {
                 p.activeConversationId() === conv.id
                   ? "bg-gray-4 text-gray-12 font-medium"
                   : "text-gray-11 hover:bg-gray-3"
-              }`}
+              } ${conv.conv_status === "delegated" ? "opacity-50" : ""}`}
               onClick={() => p.setActiveConversation(conv.id)}
             >
               <div class="flex items-center gap-1.5 truncate">
@@ -150,6 +150,16 @@ function Sidebar() {
                   </span>
                 </Show>
                 <span class="truncate">{conv.title}</span>
+                <Show when={conv.delegated_to || conv.delegated_from}>
+                  <span class="shrink-0 text-gray-8" title={conv.delegated_to ? "Delegated" : "Received delegation"}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 12h14" /><path d="m12 5 7 7-7 7" />
+                    </svg>
+                  </span>
+                </Show>
+                <Show when={conv.conv_status === "delegated"}>
+                  <span class="shrink-0 text-[9px] text-gray-8">(delegated)</span>
+                </Show>
               </div>
               <div class="text-[10px] text-gray-8 mt-0.5">
                 {new Date(conv.updated_at).toLocaleDateString()}
@@ -277,24 +287,62 @@ function ChatPane() {
                   <button
                     type="button"
                     class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
-                    onClick={() => {
+                    onClick={async () => {
                       const id = p.activeConversationId();
-                      if (id) p.client.handoverConversation(id, "remote").then(() => p.refreshConversations());
+                      if (!id) return;
+                      try {
+                        const result = await p.client.delegateConversation(id, "remote");
+                        await p.refreshConversations();
+                        p.setActiveConversation(result.delegate.id);
+                      } catch (e) {
+                        console.error("[pantheon-app] delegate failed:", e);
+                      }
                     }}
                   >
-                    Hand to Pixie →
+                    Delegate to Pixie →
                   </button>
                 </Show>
                 <Show when={conv().mode === "remote" && isTauriRuntime()}>
                   <button
                     type="button"
                     class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
-                    onClick={() => {
+                    onClick={async () => {
                       const id = p.activeConversationId();
-                      if (id) p.client.handoverConversation(id, "local").then(() => p.refreshConversations());
+                      if (!id) return;
+                      try {
+                        const result = await p.client.delegateConversation(id, "local");
+                        await p.refreshConversations();
+                        p.setActiveConversation(result.delegate.id);
+                      } catch (e) {
+                        console.error("[pantheon-app] delegate failed:", e);
+                      }
                     }}
                   >
-                    ← Take Local
+                    ← Take Back Locally
+                  </button>
+                </Show>
+                <Show when={conv().delegated_from}>
+                  <button
+                    type="button"
+                    class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
+                    onClick={() => {
+                      const from = conv().delegated_from;
+                      if (from) p.setActiveConversation(from);
+                    }}
+                  >
+                    ← From previous
+                  </button>
+                </Show>
+                <Show when={conv().delegated_to}>
+                  <button
+                    type="button"
+                    class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
+                    onClick={() => {
+                      const to = conv().delegated_to;
+                      if (to) p.setActiveConversation(to);
+                    }}
+                  >
+                    Continued →
                   </button>
                 </Show>
               </Show>

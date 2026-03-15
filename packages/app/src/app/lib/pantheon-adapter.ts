@@ -39,6 +39,9 @@ function convToSession(conv: PantheonConversation): any {
     version: "1",
     slug: conv.id,
     mode: conv.mode,
+    delegated_from: conv.delegated_from,
+    delegated_to: conv.delegated_to,
+    conv_status: conv.conv_status,
     time: {
       created: new Date(conv.created_at).getTime(),
       updated: new Date(conv.updated_at).getTime(),
@@ -715,6 +718,93 @@ export function createPantheonAdapter(
     return updated;
   }
 
+  // ── Delegate (fork conversation to another pixie) ───────────────
+
+  async function delegate(sessionID: string, mode: "local" | "remote", pixieId?: string) {
+    // 1. Abort any in-flight stream
+    const controller = activeAbort.get(sessionID);
+    if (controller) {
+      controller.abort();
+      activeAbort.delete(sessionID);
+    }
+
+    // 2. Call delegate endpoint
+    const result = await pantheonClient.delegateConversation(sessionID, mode, pixieId);
+
+    // 3. Update mode cache for both conversations
+    modeCache.set(sessionID, result.source.mode);
+    modeCache.set(result.delegate.id, result.delegate.mode);
+
+    // 4. Clear local session if delegating away
+    if (mode === "remote") {
+      localSessionMap.delete(sessionID);
+    }
+
+    // 5. Emit delegation event
+    eventQueue.push({
+      type: "session.delegated",
+      properties: {
+        sourceSessionID: sessionID,
+        delegateSessionID: result.delegate.id,
+        mode: result.delegate.mode,
+      },
+    });
+
+    // 6. If taking back locally, try to reconstruct the local session
+    if (mode === "local" && localOpenCodeClient && result.delegate.id) {
+      resumeDelegatedSession(result.delegate.id).catch((e) =>
+        console.warn("[adapter] session reconstruction on take-back failed:", e),
+      );
+    }
+
+    return result;
+  }
+
+  // ── Resume delegated session (local take-back reconstruction) ──────
+
+  async function resumeDelegatedSession(sessionID: string): Promise<boolean> {
+    try {
+      const ctx = await pantheonClient.getDelegationContext(sessionID);
+      if (ctx?.mode === "session_copy" && ctx.session_messages?.length && localOpenCodeClient) {
+        // Build a primer from the session messages and send as first prompt
+        // to the local OpenCode engine so it has full context.
+        const lines: string[] = [];
+        for (const msg of ctx.session_messages) {
+          const prefix = msg.role === "user" ? "User" : "Assistant";
+          const text = msg.content || "";
+          lines.push(`${prefix}: ${text.slice(0, 2000)}`);
+        }
+        const primer =
+          "[Delegation — continuing from previous session]\n\n" +
+          lines.join("\n\n") +
+          "\n\n---\n" +
+          "Continue this task. You have full access to the project. " +
+          "Work autonomously and complete what was discussed above.";
+
+        // Ensure local OpenCode session exists
+        let localSessionId = localSessionMap.get(sessionID);
+        if (!localSessionId) {
+          const createResult = await localOpenCodeClient.session.create({
+            body: {},
+          });
+          localSessionId = createResult?.data?.id;
+          if (localSessionId) localSessionMap.set(sessionID, localSessionId);
+        }
+
+        if (localSessionId) {
+          await localOpenCodeClient.session.prompt({
+            path: { id: localSessionId },
+            body: { parts: [{ type: "text", text: primer }] },
+          });
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn("[adapter] resumeDelegatedSession failed:", e);
+    }
+    return false;
+  }
+
   const client = {
     global,
     session,
@@ -741,5 +831,5 @@ export function createPantheonAdapter(
     part,
   } as any;
 
-  return { client, handover };
+  return { client, handover, delegate };
 }

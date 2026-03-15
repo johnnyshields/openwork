@@ -9,6 +9,9 @@ type SessionSummary = {
   title: string;
   slug?: string | null;
   mode?: "local" | "remote" | null;
+  delegated_from?: string | null;
+  delegated_to?: string | null;
+  conv_status?: "active" | "delegated" | null;
 };
 
 type WorkspaceSessionGroup = {
@@ -490,7 +493,7 @@ export default function SessionSidebar(props: SidebarProps) {
                                     session.id === props.selectedSessionId
                                       ? "bg-gray-3 text-gray-12 font-medium"
                                       : "text-gray-11 hover:text-gray-12 hover:bg-gray-2"
-                                  } ${!allowActions() ? "opacity-70" : ""}`}
+                                  } ${!allowActions() ? "opacity-70" : ""} ${session.conv_status === "delegated" ? "opacity-50" : ""}`}
                                   onClick={() => {
                                     if (!allowActions()) return;
                                     props.onSelectSession(group.workspace.id, session.id);
@@ -519,6 +522,16 @@ export default function SessionSidebar(props: SidebarProps) {
                                         </span>
                                       </Show>
                                       <span class="truncate">{session.title}</span>
+                                      <Show when={session.delegated_to || session.delegated_from}>
+                                        <span class="shrink-0 text-gray-8" title={session.delegated_to ? "Delegated" : "Received delegation"}>
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M5 12h14" /><path d="m12 5 7 7-7 7" />
+                                          </svg>
+                                        </span>
+                                      </Show>
+                                      <Show when={session.conv_status === "delegated"}>
+                                        <span class="shrink-0 text-[9px] text-gray-8">(delegated)</span>
+                                      </Show>
                                     </div>
                                     <Show
                                       when={
