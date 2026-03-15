@@ -39,7 +39,7 @@ const getDirname = (value: string) => {
 };
 
 const isMarkdown = (value: string) => /\.(md|mdx|markdown)$/i.test(value);
-const isImage = (value: string) => /\.(png|jpe?g|gif|webp|svg)$/i.test(value);
+const isImage = (value: string) => /\.(png|jpe?g|gif|webp|svg|ico|bmp|tiff?|avif|heic|heif)$/i.test(value);
 const isData = (value: string) => /\.(csv|tsv|json|jsonl|xml|yaml|yml|toml)$/i.test(value);
 const isDocument = (value: string) => /\.(txt|pdf|html|htm|rst|tex|log|doc|docx|xls|xlsx|ppt|pptx|odt|ods|odp|rtf)$/i.test(value);
 const isCode = (value: string) => /\.(py|js|ts|tsx|jsx|rb|go|rs|sh|sql|c|cpp|h|java|kt|swift|css|scss)$/i.test(value);
