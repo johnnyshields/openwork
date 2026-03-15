@@ -7,6 +7,9 @@
 
 const STORAGE_KEY = "pantheon.jwt";
 
+/** Base path for the OpenWork-compatible API on Pantheon. */
+const OW_API = "/openwork/api";
+
 export interface PantheonUser {
   id: string;
   username: string;
@@ -209,7 +212,7 @@ export function createPantheonClient(baseUrl: string) {
   // ── Conversations ─────────────────────────────────────────────────────
 
   async function listConversations(): Promise<PantheonConversation[]> {
-    return request<PantheonConversation[]>("/backend/conversations/");
+    return request<PantheonConversation[]>(`${OW_API}/conversations/`);
   }
 
   async function createConversation(opts: {
@@ -220,7 +223,7 @@ export function createPantheonClient(baseUrl: string) {
     effort?: string;
     mode?: "local" | "remote";
   }): Promise<PantheonConversation> {
-    return request<PantheonConversation>("/backend/conversations/", {
+    return request<PantheonConversation>(`${OW_API}/conversations/`, {
       method: "POST",
       body: JSON.stringify({
         title: opts.title ?? "New conversation",
@@ -234,21 +237,21 @@ export function createPantheonClient(baseUrl: string) {
   }
 
   async function getConversation(id: string): Promise<PantheonConversation> {
-    return request<PantheonConversation>(`/backend/conversations/${id}`);
+    return request<PantheonConversation>(`${OW_API}/conversations/${id}`);
   }
 
   async function updateConversation(
     id: string,
     updates: { title?: string; model?: string; effort?: string; system_prompt?: string },
   ): Promise<PantheonConversation> {
-    return request<PantheonConversation>(`/backend/conversations/${id}`, {
+    return request<PantheonConversation>(`${OW_API}/conversations/${id}`, {
       method: "PATCH",
       body: JSON.stringify(updates),
     });
   }
 
   async function deleteConversation(id: string): Promise<void> {
-    await request(`/backend/conversations/${id}`, { method: "DELETE" });
+    await request(`${OW_API}/conversations/${id}`, { method: "DELETE" });
   }
 
   // ── Messages ──────────────────────────────────────────────────────────
@@ -258,7 +261,7 @@ export function createPantheonClient(baseUrl: string) {
     limit = 100,
   ): Promise<PantheonMessage[]> {
     return request<PantheonMessage[]>(
-      `/backend/conversations/${conversationId}/messages?limit=${limit}`,
+      `${OW_API}/conversations/${conversationId}/messages?limit=${limit}`,
     );
   }
 
@@ -274,7 +277,7 @@ export function createPantheonClient(baseUrl: string) {
     // We can't use EventSource directly for POST, so use fetch + ReadableStream.
     const controller = new AbortController();
 
-    const url = `${baseUrl}/backend/conversations/${conversationId}/messages`;
+    const url = `${baseUrl}${OW_API}/conversations/${conversationId}/messages`;
     const body = JSON.stringify({ content, model: opts?.model });
 
     // Return a thin wrapper. The actual streaming is done via fetchSSE().
@@ -304,7 +307,7 @@ export function createPantheonClient(baseUrl: string) {
       onEvent?: (event: PantheonStreamEvent) => void;
     },
   ): Promise<PantheonMessage | null> {
-    const url = `${baseUrl}/backend/conversations/${conversationId}/messages`;
+    const url = `${baseUrl}${OW_API}/conversations/${conversationId}/messages`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -455,7 +458,7 @@ export function createPantheonClient(baseUrl: string) {
     conversationId: string,
     data: { message_key: string; part_id: string; part: Record<string, any>; is_final: boolean },
   ): Promise<void> {
-    await request(`/backend/conversations/${conversationId}/messages/local-part-event`, {
+    await request(`${OW_API}/conversations/${conversationId}/messages/local-part-event`, {
       method: "POST",
       body: JSON.stringify(data),
     });
@@ -466,7 +469,7 @@ export function createPantheonClient(baseUrl: string) {
     mode: "local" | "remote",
   ): Promise<PantheonConversation> {
     return request<PantheonConversation>(
-      `/backend/conversations/${conversationId}/handover`,
+      `${OW_API}/conversations/${conversationId}/handover`,
       { method: "POST", body: JSON.stringify({ mode }) },
     );
   }
@@ -477,7 +480,7 @@ export function createPantheonClient(baseUrl: string) {
     pixieId?: string,
   ): Promise<{ source: PantheonConversation; delegate: PantheonConversation }> {
     return request<{ source: PantheonConversation; delegate: PantheonConversation }>(
-      `/backend/conversations/${conversationId}/delegate`,
+      `${OW_API}/conversations/${conversationId}/delegate`,
       { method: "POST", body: JSON.stringify({ mode, pixie_id: pixieId }) },
     );
   }
@@ -492,7 +495,7 @@ export function createPantheonClient(baseUrl: string) {
 
   async function getDelegationContext(conversationId: string): Promise<any> {
     return request<any>(
-      `/backend/conversations/${conversationId}/delegation-context`,
+      `${OW_API}/conversations/${conversationId}/delegation-context`,
     );
   }
 
