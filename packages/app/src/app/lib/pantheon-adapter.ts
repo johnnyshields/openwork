@@ -220,17 +220,16 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       const abortController = new AbortController();
       activeAbort.set(sessionID, abortController);
 
-      // Track IDs from the server (set when user_message / first part arrive)
+      // Track IDs from the server (MongoDB ObjectIDs for both user + assistant)
       let userMsgId: string | null = null;
       let assistantMsgId: string | null = null;
-      let assistantInfoEmitted = false;
 
       pantheonClient
         .sendMessageStreaming(sessionID, text, undefined, {
           model,
           signal: abortController.signal,
           onEvent: (evt: PantheonStreamEvent) => {
-            // Server sends user_message with persisted MongoDB ID before streaming
+            // Server sends user_message with persisted MongoDB ID
             if (evt.type === "user_message") {
               userMsgId = (evt as any).message_id;
               eventQueue.push({
@@ -259,73 +258,42 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
               return;
             }
 
-            if (evt.type === "part") {
-              const serverMsgId = (evt as any).message_id;
-
-              // Emit assistant message info on first part
-              if (!assistantInfoEmitted) {
-                assistantInfoEmitted = true;
-                assistantMsgId = serverMsgId;
-                eventQueue.push({
-                  type: "message.updated",
-                  properties: {
-                    info: {
-                      id: assistantMsgId,
-                      sessionID,
-                      role: "assistant",
-                      parentID: userMsgId ?? "",
-                      modelID: model ?? "",
-                      providerID: "",
-                      mode: "",
-                      agent: "",
-                      path: { cwd: "", root: "" },
-                      cost: 0,
-                      tokens: {
-                        input: 0,
-                        output: 0,
-                        reasoning: 0,
-                        cache: { read: 0, write: 0 },
-                      },
-                      time: { created: Date.now() },
-                    },
+            // Server sends assistant_message with pre-created MongoDB ID
+            if ((evt as any).type === "assistant_message") {
+              assistantMsgId = (evt as any).message_id;
+              eventQueue.push({
+                type: "message.updated",
+                properties: {
+                  info: {
+                    id: assistantMsgId,
+                    sessionID,
+                    role: "assistant",
+                    parentID: userMsgId ?? "",
+                    modelID: model ?? "",
+                    providerID: "",
+                    mode: "",
+                    agent: "",
+                    path: { cwd: "", root: "" },
+                    cost: 0,
+                    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                    time: { created: Date.now() },
                   },
-                });
-              }
+                },
+              });
+              return;
+            }
 
+            if (evt.type === "part") {
               const part = {
                 ...(evt as any).part,
                 sessionID,
-                messageID: assistantMsgId,
+                messageID: assistantMsgId ?? (evt as any).message_id,
               };
               eventQueue.push({
                 type: "message.part.updated",
                 properties: { part },
               });
             } else if (evt.type === "done") {
-              // Update assistant message ID to the persisted one from the server
-              const persistedId = (evt as any).message_id;
-              if (persistedId && assistantMsgId && persistedId !== assistantMsgId) {
-                // Re-emit with the final persisted ID so it matches on reload
-                eventQueue.push({
-                  type: "message.updated",
-                  properties: {
-                    info: {
-                      id: persistedId,
-                      sessionID,
-                      role: "assistant",
-                      parentID: userMsgId ?? "",
-                      modelID: model ?? "",
-                      providerID: "",
-                      mode: "",
-                      agent: "",
-                      path: { cwd: "", root: "" },
-                      cost: 0,
-                      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-                      time: { created: Date.now() },
-                    },
-                  },
-                });
-              }
               activeAbort.delete(sessionID);
               eventQueue.push({
                 type: "session.status",
