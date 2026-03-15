@@ -209,10 +209,11 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       }
 
       // Emit user message so it appears in the chat immediately.
-      // ID must sort before the assistant message ID (localeCompare ordering).
-      // MongoDB ObjectIDs and Anthropic msg_* IDs both sort after "0",
-      // so a zero-prefixed timestamp ensures the user message comes first.
-      const userMsgId = `0-user-${Date.now()}`;
+      // Generate a hex-timestamp ID that sorts chronologically via localeCompare,
+      // matching the format used for assistant messages below.
+      const ts = Math.floor(Date.now() / 1000).toString(16).padStart(8, "0");
+      const rand = Math.random().toString(16).slice(2, 18).padStart(16, "0");
+      const userMsgId = `${ts}${rand}`;
       eventQueue.push({
         type: "message.updated",
         properties: {
@@ -245,13 +246,18 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
 
       // Fire-and-forget the streaming call; events flow through eventQueue
       let assistantInfoEmitted = false;
+      // Pre-generate assistant message ID in same hex format so it sorts after user msg
+      const aTs = Math.floor(Date.now() / 1000 + 1).toString(16).padStart(8, "0");
+      const aRand = Math.random().toString(16).slice(2, 18).padStart(16, "0");
+      const assistantMsgId = `${aTs}${aRand}`;
 
       pantheonClient
         .sendMessageStreaming(sessionID, text, undefined, {
           model,
           onEvent: (evt: PantheonStreamEvent) => {
             if (evt.type === "part") {
-              const messageID = (evt as any).message_id;
+              // Use our generated ID (not the Anthropic msg_* ID) for consistent sorting
+              const messageID = assistantMsgId;
 
               // Emit assistant message info on first part (so the UI has a container)
               if (!assistantInfoEmitted) {
