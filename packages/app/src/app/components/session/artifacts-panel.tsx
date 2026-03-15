@@ -40,12 +40,18 @@ const getDirname = (value: string) => {
 
 const isMarkdown = (value: string) => /\.(md|mdx|markdown)$/i.test(value);
 const isImage = (value: string) => /\.(png|jpe?g|gif|webp|svg)$/i.test(value);
+const isData = (value: string) => /\.(csv|tsv|json|jsonl|xml|yaml|yml|toml)$/i.test(value);
+const isDocument = (value: string) => /\.(txt|pdf|html|htm|rst|tex|log)$/i.test(value);
+const isCode = (value: string) => /\.(py|js|ts|tsx|jsx|rb|go|rs|sh|sql|c|cpp|h|java|kt|swift|css|scss)$/i.test(value);
 
-type ArtifactKind = "markdown" | "image";
+type ArtifactKind = "markdown" | "image" | "data" | "document" | "code";
 
 const artifactKind = (value: string): ArtifactKind | null => {
   if (isMarkdown(value)) return "markdown";
   if (isImage(value)) return "image";
+  if (isData(value)) return "data";
+  if (isDocument(value)) return "document";
+  if (isCode(value)) return "code";
   return null;
 };
 
@@ -118,6 +124,16 @@ export default function ArtifactsPanel(props: ArtifactsPanelProps) {
               const dir = () => getDirname(display());
               const md = () => artifact.kind === "markdown";
               const img = () => artifact.kind === "image";
+              const badge = () => {
+                switch (artifact.kind) {
+                  case "markdown": return "MD";
+                  case "image": return "IMG";
+                  case "data": return "DATA";
+                  case "document": return "DOC";
+                  case "code": return "CODE";
+                  default: return null;
+                }
+              };
               return (
                 <div
                   class="group w-full flex items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors border border-transparent hover:bg-gray-2 hover:border-gray-6/80"
@@ -129,14 +145,9 @@ export default function ArtifactsPanel(props: ArtifactsPanelProps) {
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
                       <div class="truncate text-xs font-medium text-gray-11">{base()}</div>
-                      <Show when={md()}>
+                      <Show when={badge()}>
                         <span class="shrink-0 rounded-md border border-gray-6 bg-gray-2 px-1.5 py-0.5 text-[10px] font-mono text-gray-10">
-                          MD
-                        </span>
-                      </Show>
-                      <Show when={img()}>
-                        <span class="shrink-0 rounded-md border border-gray-6 bg-gray-2 px-1.5 py-0.5 text-[10px] font-mono text-gray-10">
-                          IMG
+                          {badge()}
                         </span>
                       </Show>
                     </div>
