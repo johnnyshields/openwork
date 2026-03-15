@@ -1,5 +1,6 @@
 import {
   Match,
+  Show,
   Switch,
   createEffect,
   createMemo,
@@ -137,6 +138,7 @@ import { createExtensionsStore } from "./context/extensions";
 import { useGlobalSync } from "./context/global-sync";
 import { useGlobalSDK } from "./context/global-sdk";
 import { isPantheonMode } from "./context/pantheon";
+import { pantheonHandover } from "./context/pantheon-sdk";
 import { createWorkspaceStore } from "./context/workspace";
 import {
   updaterEnvironment,
@@ -2812,6 +2814,7 @@ export default function App() {
         slug: session.slug,
         time: session.time,
         directory: session.directory,
+        mode: (session as any).mode ?? null,
       }));
 
       setSidebarSessionsByWorkspaceId((prev) => ({
@@ -5046,6 +5049,7 @@ export default function App() {
         slug: session.slug,
         time: session.time,
         directory: session.directory,
+        mode: (session as any).mode ?? null,
       };
       const wsId = workspaceStore.activeWorkspaceId().trim();
       if (wsId) {
@@ -6298,6 +6302,14 @@ export default function App() {
     loadEarlierMessages,
     searchFiles: searchWorkspaceFiles,
     deleteSession: deleteSessionById,
+    onHandover: isPantheonMode() ? async (sessionId: string, mode: "local" | "remote") => {
+      const fn = pantheonHandover();
+      if (!fn) return;
+      await fn(sessionId, mode);
+      // Refresh sidebar sessions to reflect mode change
+      const wsId = workspaceStore.activeWorkspaceId().trim();
+      if (wsId) refreshSidebarWorkspaceSessions(wsId);
+    } : undefined,
     onTryNotionPrompt: () => {
       setPrompt("setup my crm");
       setTryNotionPromptVisible(false);
@@ -6420,8 +6432,28 @@ export default function App() {
     navigate("/session", { replace: true });
   });
 
+  const [nagDismissed, setNagDismissed] = createSignal(
+    typeof window !== "undefined" && window.localStorage.getItem("openwork.nag.dismissed") === "1"
+  );
+  const showNagBanner = () => isPantheonMode() && !isTauriRuntime() && !nagDismissed();
+
   return (
     <>
+      <Show when={showNagBanner()}>
+        <div class="flex items-center justify-between px-4 py-2 bg-indigo-2 border-b border-indigo-6 text-xs text-indigo-11">
+          <span>Install the OpenWork desktop app for local AI mode</span>
+          <button
+            type="button"
+            class="ml-4 text-indigo-9 hover:text-indigo-12 font-medium"
+            onClick={() => {
+              setNagDismissed(true);
+              try { window.localStorage.setItem("openwork.nag.dismissed", "1"); } catch {}
+            }}
+          >
+            ×
+          </button>
+        </div>
+      </Show>
       <Switch>
         <Match when={currentView() === "proto"}>
           <Switch>

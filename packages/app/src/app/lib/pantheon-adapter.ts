@@ -38,6 +38,7 @@ function convToSession(conv: PantheonConversation): any {
     directory: "",
     version: "1",
     slug: conv.id,
+    mode: conv.mode,
     time: {
       created: new Date(conv.created_at).getTime(),
       updated: new Date(conv.updated_at).getTime(),
@@ -135,10 +136,18 @@ function createEventQueue() {
 // Adapter factory
 // ---------------------------------------------------------------------------
 
-export function createPantheonAdapter(pantheonClient: PantheonClient) {
+export function createPantheonAdapter(
+  pantheonClient: PantheonClient,
+  localOpenCodeClient?: any,
+) {
   const eventQueue = createEventQueue();
   // Active AbortController per session (for cancelling in-flight prompts)
   const activeAbort = new Map<string, AbortController>();
+
+  // Mode cache: populated from session.list/get, updated on handover
+  const modeCache = new Map<string, "local" | "remote">();
+  // Local session mapping: pantheonConvId → openCodeSessionId
+  const localSessionMap = new Map<string, string>();
 
   // ── Live methods ────────────────────────────────────────────────────
 
@@ -149,21 +158,26 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
   const session = {
     list: async (_opts?: any) => {
       const convs = await pantheonClient.listConversations();
+      for (const c of convs) modeCache.set(c.id, c.mode);
       return wrap(convs.map(convToSession));
     },
 
     create: async (opts?: any) => {
       console.log("[pantheon-adapter] session.create", opts);
+      const mode = localOpenCodeClient ? "local" : "remote";
       const conv = await pantheonClient.createConversation({
         title: opts?.body?.title ?? opts?.title ?? "New conversation",
+        mode,
       });
-      console.log("[pantheon-adapter] session.created", conv.id);
+      modeCache.set(conv.id, conv.mode);
+      console.log("[pantheon-adapter] session.created", conv.id, "mode:", conv.mode);
       return wrap(convToSession(conv));
     },
 
     get: async (opts: any) => {
       const id = opts?.path?.id ?? opts?.sessionID ?? opts?.id;
       const conv = await pantheonClient.getConversation(id);
+      modeCache.set(conv.id, conv.mode);
       return wrap(convToSession(conv));
     },
 
@@ -200,6 +214,12 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       const model = opts?.model?.modelID ?? opts?.body?.model?.modelID ?? undefined;
 
       console.log("[pantheon-adapter] prompt", { sessionID, text, model, optsKeys: Object.keys(opts ?? {}) });
+
+      const mode = modeCache.get(sessionID) ?? "remote";
+
+      if (mode === "local" && localOpenCodeClient) {
+        return localPrompt(sessionID, text, model, parts);
+      }
 
       if (!sessionID) {
         console.error("[pantheon-adapter] prompt: no sessionID!", opts);
@@ -357,6 +377,14 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
         if (controller) {
           controller.abort();
           activeAbort.delete(sessionID);
+        }
+        // Also abort local OpenCode session if in local mode
+        const mode = modeCache.get(sessionID);
+        if (mode === "local" && localOpenCodeClient) {
+          const localSessionId = localSessionMap.get(sessionID);
+          if (localSessionId) {
+            await localOpenCodeClient.session.abort({ path: { id: localSessionId } }).catch(() => {});
+          }
         }
       }
       return wrap({});
@@ -538,7 +566,156 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
     update: () => stub({}),
   };
 
-  return {
+  // ── Local prompt handler ──────────────────────────────────────────
+
+  async function localPrompt(sessionID: string, text: string, model: string | undefined, parts: any[]) {
+    // 1. Push busy status
+    eventQueue.push({
+      type: "session.status",
+      properties: { sessionID, status: { type: "busy" } },
+    });
+
+    // 2. POST user message to Pantheon for persistence (local ack)
+    try {
+      await pantheonClient.sendMessageStreaming(sessionID, text, undefined, {
+        model,
+        onEvent: (evt: any) => {
+          if (evt.type === "user_message") {
+            eventQueue.push({
+              type: "message.updated",
+              properties: {
+                info: {
+                  id: evt.message_id,
+                  sessionID,
+                  role: "user",
+                  time: { created: evt.created_at || new Date().toISOString(), updated: evt.created_at || new Date().toISOString() },
+                },
+              },
+            });
+            eventQueue.push({
+              type: "message.part.updated",
+              properties: {
+                part: { type: "text", id: `${evt.message_id}-text`, sessionID, messageID: evt.message_id, text },
+              },
+            });
+          }
+        },
+      });
+    } catch (e) {
+      console.error("Failed to persist user message to Pantheon:", e);
+    }
+
+    // 3. Ensure local OpenCode session exists
+    let localSessionId = localSessionMap.get(sessionID);
+    if (!localSessionId) {
+      const sess = await localOpenCodeClient!.session.create({ body: { directory: "" } });
+      localSessionId = sess.data?.id ?? sess.id;
+      localSessionMap.set(sessionID, localSessionId!);
+    }
+
+    // 4. Generate message_key for Pantheon persistence
+    const messageKey = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // 5. Create abort controller
+    const abortController = new AbortController();
+    activeAbort.set(sessionID, abortController);
+
+    // 6. Send prompt to local OpenCode
+    try {
+      const promptBody: any = { parts: [{ type: "text", text }] };
+      if (model) promptBody.model = { modelID: model, providerID: "anthropic" };
+
+      await localOpenCodeClient!.session.prompt({
+        path: { id: localSessionId },
+        body: promptBody,
+      });
+    } catch (_e) {
+      // prompt() may return immediately while streaming continues
+    }
+
+    // 7. Subscribe to local OpenCode events and mirror to Pantheon
+    try {
+      const sub = await localOpenCodeClient!.event.subscribe(localSessionId);
+      const stream = sub.stream ?? sub.data?.stream ?? sub;
+
+      for await (const event of stream) {
+        if (abortController.signal.aborted) break;
+
+        if (event.type === "message.updated" && event.properties?.info?.role === "assistant") {
+          eventQueue.push({
+            type: "message.updated",
+            properties: {
+              info: { ...event.properties.info, sessionID },
+            },
+          });
+        }
+
+        if (event.type === "message.part.updated") {
+          const part = { ...event.properties.part, sessionID };
+          eventQueue.push({ type: "message.part.updated", properties: { part } });
+          // Mirror to Pantheon (fire-and-forget)
+          pantheonClient.postLocalPartEvent(sessionID, {
+            message_key: messageKey,
+            part_id: part.id,
+            part: { type: part.type, id: part.id, text: part.text ?? "" },
+            is_final: false,
+          }).catch(() => {});
+        }
+
+        if (event.type === "session.idle" || event.type === "session.status") {
+          if (event.type === "session.idle" || event.properties?.status?.type === "idle") {
+            activeAbort.delete(sessionID);
+            // Mark final in Pantheon
+            pantheonClient.postLocalPartEvent(sessionID, {
+              message_key: messageKey,
+              part_id: "__final__",
+              part: { type: "text", id: "__final__", text: "" },
+              is_final: true,
+            }).catch(() => {});
+            eventQueue.push({ type: "session.status", properties: { sessionID, status: { type: "idle" } } });
+            eventQueue.push({ type: "session.idle", properties: { sessionID } });
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Local OpenCode event stream error:", e);
+      activeAbort.delete(sessionID);
+      eventQueue.push({ type: "session.status", properties: { sessionID, status: { type: "idle" } } });
+    }
+
+    return wrap({});
+  }
+
+  // ── Handover (switch local ↔ remote) ────────────────────────────
+
+  async function handover(sessionID: string, mode: "local" | "remote") {
+    // 1. Abort any in-flight stream
+    const controller = activeAbort.get(sessionID);
+    if (controller) {
+      controller.abort();
+      activeAbort.delete(sessionID);
+    }
+
+    // 2. Call Pantheon handover endpoint
+    const updated = await pantheonClient.handoverConversation(sessionID, mode);
+    modeCache.set(sessionID, updated.mode);
+
+    // 3. If switching away from local, clear local session
+    if (mode === "remote") {
+      localSessionMap.delete(sessionID);
+    }
+
+    // 4. Emit mode change event
+    eventQueue.push({
+      type: "session.updated",
+      properties: { sessionID, mode: updated.mode },
+    });
+
+    return updated;
+  }
+
+  const client = {
     global,
     session,
     event,
@@ -563,4 +740,6 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
     auth,
     part,
   } as any;
+
+  return { client, handover };
 }

@@ -8,6 +8,7 @@ type SessionSummary = {
   id: string;
   title: string;
   slug?: string | null;
+  mode?: "local" | "remote" | null;
 };
 
 type WorkspaceSessionGroup = {
@@ -501,7 +502,24 @@ export default function SessionSidebar(props: SidebarProps) {
                                   disabled={!allowActions()}
                                 >
                                   <div class="flex items-center justify-between gap-2 w-full overflow-hidden">
-                                    <div class="truncate">{session.title}</div>
+                                    <div class="flex items-center gap-1.5 truncate">
+                                      <Show when={session.mode === "local"}>
+                                        <span class="shrink-0 text-gray-9" title="Local mode">
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <rect x="2" y="3" width="20" height="14" rx="2" />
+                                            <path d="M2 20h20" />
+                                          </svg>
+                                        </span>
+                                      </Show>
+                                      <Show when={session.mode === "remote"}>
+                                        <span class="shrink-0 text-gray-9" title="Remote mode">
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+                                          </svg>
+                                        </span>
+                                      </Show>
+                                      <span class="truncate">{session.title}</span>
+                                    </div>
                                     <Show
                                       when={
                                         props.sessionStatusById[session.id] &&

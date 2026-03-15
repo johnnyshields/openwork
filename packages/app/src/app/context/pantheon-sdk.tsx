@@ -48,6 +48,10 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+type HandoverFn = (sessionID: string, mode: "local" | "remote") => Promise<any>;
+const [pantheonHandover, setPantheonHandover] = createSignal<HandoverFn | null>(null);
+export { pantheonHandover };
+
 export function PantheonSDKProvider(props: ParentProps) {
   const [healthy, setHealthy] = createSignal<boolean | undefined>(undefined);
   const [loginState, setLoginState] = createSignal<"pending" | "ok" | "error">("pending");
@@ -123,8 +127,9 @@ export function PantheonSDKProvider(props: ParentProps) {
   // ── Main login flow ─────────────────────────────────────────────────
 
   function completeLogin() {
-    const adapter = createPantheonAdapter(client);
+    const { client: adapter, handover } = createPantheonAdapter(client);
     setAdapterClient(adapter as any);
+    setPantheonHandover(() => handover);
     setHealthy(true);
     setLoginState("ok");
   }

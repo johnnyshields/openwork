@@ -239,6 +239,7 @@ export type SessionViewProps = {
   loadingEarlierMessages: boolean;
   loadEarlierMessages: (sessionId: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
+  onHandover?: (sessionId: string, mode: "local" | "remote") => Promise<void>;
 };
 
 type SharedSkillItem = {
@@ -2389,6 +2390,15 @@ export default function SessionView(props: SessionViewProps) {
     }
     return "";
   });
+  const selectedSessionMode = createMemo((): "local" | "remote" | null => {
+    const id = props.selectedSessionId;
+    if (!id) return null;
+    for (const group of props.workspaceSessionGroups) {
+      const match = group.sessions.find((session) => session.id === id);
+      if (match?.mode) return match.mode;
+    }
+    return null;
+  });
   const hasWorkspaceConfigured = createMemo(() => props.workspaces.length > 0);
   const showWorkspaceSetupEmptyState = createMemo(
     () => !hasWorkspaceConfigured() && !props.selectedSessionId && props.messages.length === 0,
@@ -3419,6 +3429,41 @@ export default function SessionView(props: SessionViewProps) {
                 ? "Create or connect a worker"
                 : (selectedSessionTitle() || "New session")}
             </h1>
+            <Show when={selectedSessionMode()}>
+              {(mode) => (
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span
+                    class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border border-gray-6 text-gray-10 bg-gray-2"
+                    title={mode() === "local" ? "Running locally" : "Running on Pixie (remote)"}
+                  >
+                    {mode() === "local" ? (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M2 20h20" /></svg>
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" /></svg>
+                    )}
+                    {mode() === "local" ? "Local" : "Remote"}
+                  </span>
+                  <Show when={props.onHandover && mode() === "local"}>
+                    <button
+                      type="button"
+                      class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
+                      onClick={() => props.selectedSessionId && props.onHandover?.(props.selectedSessionId, "remote")}
+                    >
+                      Hand to Pixie →
+                    </button>
+                  </Show>
+                  <Show when={props.onHandover && mode() === "remote" && isTauriRuntime()}>
+                    <button
+                      type="button"
+                      class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
+                      onClick={() => props.selectedSessionId && props.onHandover?.(props.selectedSessionId, "local")}
+                    >
+                      ← Take Local
+                    </button>
+                  </Show>
+                </div>
+              )}
+            </Show>
             <Show when={props.developerMode}>
               <span class="text-xs text-dls-secondary">{props.headerStatus}</span>
             </Show>

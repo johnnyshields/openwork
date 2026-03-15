@@ -7,7 +7,7 @@
  */
 
 import { createSignal, createMemo, For, Show, onMount } from "solid-js";
-import { usePantheon } from "./context/pantheon";
+import { usePantheon, isPantheonMode } from "./context/pantheon";
 import type { PantheonConversation, PantheonWorkspace } from "./lib/pantheon-client";
 import { isTauriRuntime } from "./utils";
 import MessageList from "./components/session/message-list";
@@ -18,19 +18,40 @@ import MessageList from "./components/session/message-list";
 
 export function PantheonApp() {
   const p = usePantheon();
+  const [nagDismissed, setNagDismissed] = createSignal(
+    typeof window !== "undefined" && window.localStorage.getItem("openwork.nag.dismissed") === "1"
+  );
+  const showNag = () => isPantheonMode() && !isTauriRuntime() && !nagDismissed();
 
   return (
-    <div class="h-screen flex bg-gray-1 text-gray-12">
-      <Show when={p.isLoggingIn()}>
-        <LoginSpinner />
+    <div class="h-screen flex flex-col bg-gray-1 text-gray-12">
+      <Show when={showNag()}>
+        <div class="flex items-center justify-between px-4 py-2 bg-indigo-2 border-b border-indigo-6 text-xs text-indigo-11 shrink-0">
+          <span>Install the OpenWork desktop app for local AI mode</span>
+          <button
+            type="button"
+            class="ml-4 text-indigo-9 hover:text-indigo-12 font-medium"
+            onClick={() => {
+              setNagDismissed(true);
+              try { window.localStorage.setItem("openwork.nag.dismissed", "1"); } catch {}
+            }}
+          >
+            ×
+          </button>
+        </div>
       </Show>
-      <Show when={p.loginError()}>
-        <LoginError error={p.loginError()!} />
-      </Show>
-      <Show when={p.isLoggedIn()}>
-        <Sidebar />
-        <ChatPane />
-      </Show>
+      <div class="flex flex-1 min-h-0">
+        <Show when={p.isLoggingIn()}>
+          <LoginSpinner />
+        </Show>
+        <Show when={p.loginError()}>
+          <LoginError error={p.loginError()!} />
+        </Show>
+        <Show when={p.isLoggedIn()}>
+          <Sidebar />
+          <ChatPane />
+        </Show>
+      </div>
     </div>
   );
 }
@@ -117,7 +138,19 @@ function Sidebar() {
               }`}
               onClick={() => p.setActiveConversation(conv.id)}
             >
-              <div class="truncate">{conv.title}</div>
+              <div class="flex items-center gap-1.5 truncate">
+                <Show when={conv.mode === "local"}>
+                  <span class="shrink-0 text-gray-9" title="Local mode">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M2 20h20" /></svg>
+                  </span>
+                </Show>
+                <Show when={conv.mode === "remote"}>
+                  <span class="shrink-0 text-gray-9" title="Remote mode">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" /></svg>
+                  </span>
+                </Show>
+                <span class="truncate">{conv.title}</span>
+              </div>
               <div class="text-[10px] text-gray-8 mt-0.5">
                 {new Date(conv.updated_at).toLocaleDateString()}
               </div>
@@ -180,6 +213,9 @@ function ChatPane() {
   let scrollContainerRef: HTMLDivElement | undefined;
 
   const messages = createMemo(() => p.activeMessages());
+  const activeConv = createMemo(() =>
+    p.conversations().find((c) => c.id === p.activeConversationId()),
+  );
 
   const scrollToBottom = () => {
     messagesEndRef?.scrollIntoView({ behavior: "smooth" });
@@ -220,6 +256,51 @@ function ChatPane() {
         when={p.activeConversationId()}
         fallback={<EmptyState />}
       >
+        {/* Chat header */}
+        <Show when={activeConv()}>
+          {(conv) => (
+            <div class="flex items-center gap-2 px-6 py-2 border-b border-gray-6 shrink-0">
+              <h2 class="text-xs font-medium text-gray-11 truncate">{conv().title}</h2>
+              <Show when={conv().mode}>
+                <span
+                  class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border border-gray-6 text-gray-10 bg-gray-2"
+                  title={conv().mode === "local" ? "Running locally" : "Running on Pixie (remote)"}
+                >
+                  {conv().mode === "local" ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M2 20h20" /></svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" /></svg>
+                  )}
+                  {conv().mode === "local" ? "Local" : "Remote"}
+                </span>
+                <Show when={conv().mode === "local"}>
+                  <button
+                    type="button"
+                    class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
+                    onClick={() => {
+                      const id = p.activeConversationId();
+                      if (id) p.client.handoverConversation(id, "remote").then(() => p.refreshConversations());
+                    }}
+                  >
+                    Hand to Pixie →
+                  </button>
+                </Show>
+                <Show when={conv().mode === "remote" && isTauriRuntime()}>
+                  <button
+                    type="button"
+                    class="text-[10px] text-gray-9 hover:text-gray-12 transition-colors"
+                    onClick={() => {
+                      const id = p.activeConversationId();
+                      if (id) p.client.handoverConversation(id, "local").then(() => p.refreshConversations());
+                    }}
+                  >
+                    ← Take Local
+                  </button>
+                </Show>
+              </Show>
+            </div>
+          )}
+        </Show>
         {/* Messages */}
         <div ref={scrollContainerRef} class="flex-1 overflow-y-auto px-6 py-8">
           <div class="max-w-[700px] mx-auto">

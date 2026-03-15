@@ -23,6 +23,7 @@ export interface PantheonConversation {
   agent_id: string | null;
   provider: string;
   system_prompt: string | null;
+  mode: "local" | "remote";
   created_at: string;
   updated_at: string;
 }
@@ -214,6 +215,7 @@ export function createPantheonClient(baseUrl: string) {
     provider?: string;
     model?: string;
     effort?: string;
+    mode?: "local" | "remote";
   }): Promise<PantheonConversation> {
     return request<PantheonConversation>("/backend/conversations/", {
       method: "POST",
@@ -223,6 +225,7 @@ export function createPantheonClient(baseUrl: string) {
         provider: opts.provider ?? "claude",
         model: opts.model,
         effort: opts.effort,
+        mode: opts.mode,
       }),
     });
   }
@@ -443,6 +446,28 @@ export function createPantheonClient(baseUrl: string) {
     await request(`/backend/workspaces/${id}`, { method: "DELETE" });
   }
 
+  // ── Dual-mode (local/remote) ─────────────────────────────────────
+
+  async function postLocalPartEvent(
+    conversationId: string,
+    data: { message_key: string; part_id: string; part: Record<string, any>; is_final: boolean },
+  ): Promise<void> {
+    await request(`/backend/conversations/${conversationId}/messages/local-part-event`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async function handoverConversation(
+    conversationId: string,
+    mode: "local" | "remote",
+  ): Promise<PantheonConversation> {
+    return request<PantheonConversation>(
+      `/backend/conversations/${conversationId}/handover`,
+      { method: "POST", body: JSON.stringify({ mode }) },
+    );
+  }
+
   return {
     getToken,
     isLoggedIn,
@@ -464,6 +489,8 @@ export function createPantheonClient(baseUrl: string) {
     getWorkspace,
     updateWorkspace,
     deleteWorkspace,
+    postLocalPartEvent,
+    handoverConversation,
   };
 }
 

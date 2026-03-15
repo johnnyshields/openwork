@@ -22,6 +22,7 @@ export type SidebarSessionItem = {
     created?: number | null;
   };
   directory?: string | null;
+  mode?: "local" | "remote" | null;
 };
 
 export type WorkspaceSessionGroup = {
