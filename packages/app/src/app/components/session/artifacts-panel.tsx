@@ -40,11 +40,13 @@ const getDirname = (value: string) => {
 
 const isMarkdown = (value: string) => /\.(md|mdx|markdown)$/i.test(value);
 const isImage = (value: string) => /\.(png|jpe?g|gif|webp|svg|ico|bmp|tiff?|avif|heic|heif)$/i.test(value);
-const isData = (value: string) => /\.(csv|tsv|json|jsonl|xml|yaml|yml|toml)$/i.test(value);
+const isData = (value: string) => /\.(csv|tsv|json|jsonl|ndjson|xml|yaml|yml|toml|parquet|sqlite|db|ipynb)$/i.test(value);
 const isDocument = (value: string) => /\.(txt|pdf|html|htm|rst|tex|log|doc|docx|xls|xlsx|ppt|pptx|odt|ods|odp|rtf)$/i.test(value);
-const isCode = (value: string) => /\.(py|js|ts|tsx|jsx|rb|go|rs|sh|sql|c|cpp|h|java|kt|swift|css|scss)$/i.test(value);
+const isCode = (value: string) => /\.(py|js|ts|tsx|jsx|rb|go|rs|sh|bash|zsh|bat|cmd|ps1|sql|c|cpp|h|java|kt|swift|css|scss|less|sass|vue|svelte|php|r|dart|lua|proto|graphql|tf|hcl|zig|ex|exs|scala|clj)$/i.test(value);
+const isConfig = (value: string) => /\.(ini|cfg|conf|env|properties|editorconfig)$/i.test(value);
+const isDiagram = (value: string) => /\.(mermaid|dot|plantuml|puml)$/i.test(value);
 
-type ArtifactKind = "markdown" | "image" | "data" | "document" | "code";
+type ArtifactKind = "markdown" | "image" | "data" | "document" | "code" | "config" | "diagram";
 
 const artifactKind = (value: string): ArtifactKind | null => {
   if (isMarkdown(value)) return "markdown";
@@ -52,6 +54,8 @@ const artifactKind = (value: string): ArtifactKind | null => {
   if (isData(value)) return "data";
   if (isDocument(value)) return "document";
   if (isCode(value)) return "code";
+  if (isConfig(value)) return "config";
+  if (isDiagram(value)) return "diagram";
   return null;
 };
 
@@ -131,6 +135,8 @@ export default function ArtifactsPanel(props: ArtifactsPanelProps) {
                   case "data": return "DATA";
                   case "document": return "DOC";
                   case "code": return "CODE";
+                  case "config": return "CFG";
+                  case "diagram": return "DIA";
                   default: return null;
                 }
               };
