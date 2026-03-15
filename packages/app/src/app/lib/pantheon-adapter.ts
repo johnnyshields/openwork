@@ -208,6 +208,35 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
         return wrap({});
       }
 
+      // Emit user message so it appears in the chat immediately.
+      // ID must sort before the assistant message ID (localeCompare ordering).
+      // MongoDB ObjectIDs and Anthropic msg_* IDs both sort after "0",
+      // so a zero-prefixed timestamp ensures the user message comes first.
+      const userMsgId = `0-user-${Date.now()}`;
+      eventQueue.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: userMsgId,
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+          },
+        },
+      });
+      eventQueue.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            type: "text",
+            id: `${userMsgId}-text`,
+            sessionID,
+            messageID: userMsgId,
+            text,
+          },
+        },
+      });
+
       // Push responding status before streaming begins
       eventQueue.push({
         type: "session.status",
@@ -215,45 +244,52 @@ export function createPantheonAdapter(pantheonClient: PantheonClient) {
       });
 
       // Fire-and-forget the streaming call; events flow through eventQueue
+      let assistantInfoEmitted = false;
+
       pantheonClient
         .sendMessageStreaming(sessionID, text, undefined, {
           model,
           onEvent: (evt: PantheonStreamEvent) => {
-            console.log("[pantheon-adapter] stream event", evt.type, evt);
             if (evt.type === "part") {
+              const messageID = (evt as any).message_id;
+
+              // Emit assistant message info on first part (so the UI has a container)
+              if (!assistantInfoEmitted) {
+                assistantInfoEmitted = true;
+                eventQueue.push({
+                  type: "message.updated",
+                  properties: {
+                    info: {
+                      id: messageID,
+                      sessionID,
+                      role: "assistant",
+                      parentID: userMsgId,
+                      modelID: model ?? "",
+                      providerID: "",
+                      mode: "",
+                      agent: "",
+                      path: { cwd: "", root: "" },
+                      cost: 0,
+                      tokens: {
+                        input: 0,
+                        output: 0,
+                        reasoning: 0,
+                        cache: { read: 0, write: 0 },
+                      },
+                      time: { created: Date.now() },
+                    },
+                  },
+                });
+              }
+
               const part = {
                 ...(evt as any).part,
                 sessionID,
-                messageID: (evt as any).message_id,
+                messageID,
               };
               eventQueue.push({
                 type: "message.part.updated",
                 properties: { part },
-              });
-            } else if (evt.type === "message") {
-              const msg = evt as any;
-              const info = {
-                id: msg.id ?? "",
-                sessionID,
-                role: "assistant",
-                parentID: "",
-                modelID: msg.model ?? "",
-                providerID: "",
-                mode: "",
-                agent: "",
-                path: { cwd: "", root: "" },
-                cost: 0,
-                tokens: {
-                  input: 0,
-                  output: 0,
-                  reasoning: 0,
-                  cache: { read: 0, write: 0 },
-                },
-                time: { created: Date.now() },
-              };
-              eventQueue.push({
-                type: "message.updated",
-                properties: { info },
               });
             } else if (evt.type === "done") {
               eventQueue.push({
