@@ -3,12 +3,24 @@ import { GlobalSDKProvider } from "./context/global-sdk";
 import { GlobalSyncProvider } from "./context/global-sync";
 import { LocalProvider } from "./context/local";
 import { ServerProvider } from "./context/server";
+import { isPantheonMode, PantheonSDKProvider } from "./context/pantheon-sdk";
 import { isWebDeployment } from "./lib/openwork-deployment";
 import { isTauriRuntime } from "./utils";
 
 export default function AppEntry() {
+  // Pantheon mode: full OpenWork UI backed by Pantheon API
+  if (isPantheonMode()) {
+    return (
+      <PantheonSDKProvider>
+        <LocalProvider>
+          <App />
+        </LocalProvider>
+      </PantheonSDKProvider>
+    );
+  }
+
+  // OpenCode mode (Tauri desktop / standalone)
   const defaultUrl = (() => {
-    // Desktop app connects to the local OpenCode engine.
     if (isTauriRuntime()) return "http://127.0.0.1:4096";
 
     // When running the web UI against an OpenWork server (e.g. Docker dev stack),
@@ -27,7 +39,6 @@ export default function AppEntry() {
       return `${window.location.origin}/opencode`;
     }
 
-    // Dev fallback (Vite) - allow overriding for remote debugging.
     const envUrl =
       typeof import.meta.env?.VITE_OPENCODE_URL === "string"
         ? import.meta.env.VITE_OPENCODE_URL.trim()

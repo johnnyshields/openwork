@@ -19,7 +19,7 @@ type GlobalSDKContextValue = {
   event: ReturnType<typeof createGlobalEmitter<{ [key: string]: Event }>>;
 };
 
-const GlobalSDKContext = createContext<GlobalSDKContextValue | undefined>(undefined);
+export const GlobalSDKContext = createContext<GlobalSDKContextValue | undefined>(undefined);
 
 export function GlobalSDKProvider(props: ParentProps) {
   const server = useServer();

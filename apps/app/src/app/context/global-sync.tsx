@@ -38,7 +38,7 @@ type ProjectMeta = {
   icon?: Project["icon"];
 };
 
-type GlobalState = {
+export type GlobalState = {
   ready: boolean;
   error?: string;
   serverVersion?: string;
@@ -52,7 +52,7 @@ type GlobalState = {
   vcs: Record<string, VcsInfo | null>;
 };
 
-type GlobalSyncContextValue = {
+export type GlobalSyncContextValue = {
   data: Store<GlobalState>;
   set: SetStoreFunction<GlobalState>;
   child: (directory: string) => WorkspaceStore;
@@ -60,7 +60,7 @@ type GlobalSyncContextValue = {
   refreshDirectory: (directory: string) => Promise<void>;
 };
 
-const GlobalSyncContext = createContext<GlobalSyncContextValue | undefined>(undefined);
+export const GlobalSyncContext = createContext<GlobalSyncContextValue | undefined>(undefined);
 
 const createWorkspaceState = (): WorkspaceState => ({
   status: "idle",

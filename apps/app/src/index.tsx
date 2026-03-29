@@ -14,6 +14,23 @@ import { initLocale } from "./i18n";
 bootstrapTheme();
 initLocale();
 
+// Prevent Tauri from crashing on unhandled fetch/SSE errors (e.g. server restart)
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason;
+  const msg = reason instanceof Error ? reason.message : String(reason ?? "");
+  const isNetworkError =
+    msg.includes("fetch") ||
+    msg.includes("network") ||
+    msg.includes("abort") ||
+    msg.includes("connection") ||
+    msg.includes("Failed to fetch") ||
+    msg.includes("ECONNREFUSED");
+  if (isNetworkError) {
+    console.warn("[openwork] suppressed network error:", msg);
+    event.preventDefault();
+  }
+});
+
 const root = document.getElementById("root");
 
 if (!root) {
