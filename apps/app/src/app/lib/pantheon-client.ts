@@ -1,0 +1,555 @@
+/**
+ * Pantheon HTTP client for the conversations API.
+ *
+ * Handles auth (localhost auto-login), conversation CRUD, and message
+ * send/receive including SSE streaming for agent responses.
+ */
+
+const STORAGE_KEY = "pantheon.jwt";
+
+/** Base path for the OpenWork-compatible API on Pantheon. */
+const OW_API = "/openwork/api";
+
+export interface PantheonUser {
+  id: string;
+  username: string;
+  email: string;
+  display_name: string;
+  role: string;
+}
+
+export interface PantheonConversation {
+  id: string;
+  title: string;
+  model: string | null;
+  effort: string | null;
+  agent_id: string | null;
+  provider: string;
+  system_prompt: string | null;
+  mode: "local" | "remote";
+  delegated_from: string | null;
+  delegated_to: string | null;
+  conv_status: "active" | "delegated";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PantheonMessage {
+  id: string;
+  conversation_id: string;
+  role: "user" | "assistant";
+  content: string;
+  model: string | null;
+  source: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  created_at: string;
+  parts?: any[];
+}
+
+export type PantheonStreamEvent =
+  | { type: "user_message"; message_id: string; content: string; created_at?: string }
+  | { type: "part"; message_id: string; part: any }
+  | { type: "message"; id: string; content: string; role: string; model?: string }
+  | { type: "done"; message_id: string }
+  | { type: "error"; error: string };
+
+export interface PantheonAgent {
+  id: string;
+  name: string;
+  system_prompt: string | null;
+  platform: string;
+  status: string;
+}
+
+export interface PantheonWorkspace {
+  id: string;
+  name: string;
+  mode: "local" | "remote";
+  status: "creating" | "ready" | "running" | "stopped" | "error";
+  repo_url?: string;
+  repo_branch?: string;
+  local_path?: string;
+  container_id?: string;
+  agent_id?: string;
+  workspace_id?: string;
+  created_at: string;
+  updated_at: string;
+  nightshift_api_key?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
+
+export function createPantheonClient(baseUrl: string) {
+  let token = loadToken();
+
+  function loadToken(): string | null {
+    try {
+      return localStorage.getItem(STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  function saveToken(t: string) {
+    token = t;
+    try {
+      localStorage.setItem(STORAGE_KEY, t);
+    } catch {
+      // ignore
+    }
+  }
+
+  function clearToken() {
+    token = null;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
+  function getToken() {
+    return token;
+  }
+
+  async function request<T = unknown>(
+    path: string,
+    options: RequestInit = {},
+  ): Promise<T> {
+    const url = `${baseUrl}${path}`;
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string> | undefined),
+    };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    if (options.body && !headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    const resp = await fetch(url, { ...options, headers });
+
+    if (resp.status === 401 || resp.status === 403) {
+      clearToken();
+      throw new PantheonAuthError(resp.status, "Authentication failed");
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new PantheonApiError(resp.status, text || resp.statusText);
+    }
+
+    const ct = resp.headers.get("content-type") ?? "";
+    if (ct.includes("application/json")) {
+      return (await resp.json()) as T;
+    }
+    return (await resp.text()) as unknown as T;
+  }
+
+  // ── Auth ──────────────────────────────────────────────────────────────
+
+  async function loginLocalhost(): Promise<{ token: string; user: PantheonUser }> {
+    const data = await request<{
+      access_token: string;
+      user: PantheonUser;
+    }>("/backend/login/localhost", { method: "POST" });
+    saveToken(data.access_token);
+    return { token: data.access_token, user: data.user };
+  }
+
+  async function me(): Promise<PantheonUser> {
+    return request<PantheonUser>("/backend/me");
+  }
+
+  async function exchangeCode(
+    code: string,
+    redirectUri: string,
+    codeVerifier?: string,
+  ): Promise<{ access_token: string; id_token: string; expires_in: number }> {
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: "openwork",
+      client_secret: "",
+    });
+    if (codeVerifier) {
+      body.set("code_verifier", codeVerifier);
+    }
+
+    const resp = await fetch(`${baseUrl}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+
+    if (resp.status === 401 || resp.status === 403) {
+      clearToken();
+      throw new PantheonAuthError(resp.status, "Authentication failed");
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new PantheonApiError(resp.status, text || resp.statusText);
+    }
+
+    const data = await resp.json();
+    saveToken(data.access_token);
+    return data;
+  }
+
+  function isLoggedIn(): boolean {
+    return !!token;
+  }
+
+  // ── Agents ────────────────────────────────────────────────────────────
+
+  async function listAgents(): Promise<PantheonAgent[]> {
+    return request<PantheonAgent[]>("/backend/agents");
+  }
+
+  // ── Conversations ─────────────────────────────────────────────────────
+
+  async function listConversations(): Promise<PantheonConversation[]> {
+    return request<PantheonConversation[]>(`${OW_API}/conversations/`);
+  }
+
+  async function createConversation(opts: {
+    title?: string;
+    agent_id?: string;
+    provider?: string;
+    model?: string;
+    effort?: string;
+    mode?: "local" | "remote";
+  }): Promise<PantheonConversation> {
+    return request<PantheonConversation>(`${OW_API}/conversations/`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: opts.title ?? "New conversation",
+        agent_id: opts.agent_id,
+        provider: opts.provider ?? "claude",
+        model: opts.model,
+        effort: opts.effort,
+        mode: opts.mode,
+      }),
+    });
+  }
+
+  async function getConversation(id: string): Promise<PantheonConversation> {
+    return request<PantheonConversation>(`${OW_API}/conversations/${id}`);
+  }
+
+  async function updateConversation(
+    id: string,
+    updates: { title?: string; model?: string; effort?: string; system_prompt?: string },
+  ): Promise<PantheonConversation> {
+    return request<PantheonConversation>(`${OW_API}/conversations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async function deleteConversation(id: string): Promise<void> {
+    await request(`${OW_API}/conversations/${id}`, { method: "DELETE" });
+  }
+
+  // ── Messages ──────────────────────────────────────────────────────────
+
+  async function getMessages(
+    conversationId: string,
+    limit = 100,
+  ): Promise<PantheonMessage[]> {
+    return request<PantheonMessage[]>(
+      `${OW_API}/conversations/${conversationId}/messages?limit=${limit}`,
+    );
+  }
+
+  /**
+   * Send a message and return an SSE EventSource for the streaming response.
+   * The caller should listen for `message` events and parse JSON data.
+   */
+  function sendMessage(
+    conversationId: string,
+    content: string,
+    opts?: { model?: string },
+  ): { eventSource: EventSource; abort: () => void } {
+    // We can't use EventSource directly for POST, so use fetch + ReadableStream.
+    const controller = new AbortController();
+
+    const url = `${baseUrl}${OW_API}/conversations/${conversationId}/messages`;
+    const body = JSON.stringify({ content, model: opts?.model });
+
+    // Return a thin wrapper. The actual streaming is done via fetchSSE().
+    return {
+      eventSource: null as unknown as EventSource, // placeholder
+      abort: () => controller.abort(),
+    };
+  }
+
+  /**
+   * Send a message via fetch and stream SSE response chunks.
+   * Returns the final assistant message content.
+   *
+   * Supports both structured part events and legacy plain-text events:
+   * - `{type:"part", message_id, part}` — structured Part update
+   * - `{type:"message", id, content, role}` — legacy plain text
+   * - `{type:"done", message_id}` — turn complete
+   * - `[DONE]` — SSE stream end
+   */
+  async function sendMessageStreaming(
+    conversationId: string,
+    content: string,
+    onChunk?: (data: { role: string; content: string; done: boolean }) => void,
+    opts?: {
+      model?: string;
+      signal?: AbortSignal;
+      onEvent?: (event: PantheonStreamEvent) => void;
+    },
+  ): Promise<PantheonMessage | null> {
+    const url = `${baseUrl}${OW_API}/conversations/${conversationId}/messages`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content, model: opts?.model }),
+      signal: opts?.signal,
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new PantheonApiError(resp.status, text || resp.statusText);
+    }
+
+    // Parse SSE stream
+    const reader = resp.body?.getReader();
+    if (!reader) return null;
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let lastMessage: PantheonMessage | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Process complete SSE events
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? ""; // keep incomplete line
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") {
+            onChunk?.({ role: "assistant", content: "", done: true });
+            continue;
+          }
+          try {
+            const parsed = JSON.parse(data) as PantheonStreamEvent;
+
+            if (parsed.type === "error" || (!parsed.type && (parsed as any).error)) {
+              const errMsg = parsed.error ?? (parsed as any).error;
+              throw new PantheonApiError(0, errMsg);
+            }
+
+            if (parsed.type === "part") {
+              opts?.onEvent?.(parsed);
+              // Also fire legacy onChunk for text parts so existing
+              // callers that only listen for onChunk still work.
+              if (parsed.part?.type === "text") {
+                onChunk?.({
+                  role: "assistant",
+                  content: parsed.part.text ?? "",
+                  done: false,
+                });
+              }
+              continue;
+            }
+
+            if (parsed.type === "done") {
+              opts?.onEvent?.(parsed);
+              onChunk?.({ role: "assistant", content: "", done: true });
+              continue;
+            }
+
+            // Legacy plain-text message event (or untyped)
+            if (parsed.type === "message" || (parsed as any).role === "assistant") {
+              const msg = parsed as any;
+              opts?.onEvent?.(parsed);
+              lastMessage = {
+                id: msg.id ?? "",
+                conversation_id: conversationId,
+                role: "assistant",
+                content: msg.content ?? "",
+                model: msg.model ?? null,
+                source: "nightshift",
+                input_tokens: 0,
+                output_tokens: 0,
+                created_at: new Date().toISOString(),
+              };
+              onChunk?.({
+                role: "assistant",
+                content: msg.content ?? "",
+                done: false,
+              });
+              continue;
+            }
+
+            // Forward any other typed events
+            opts?.onEvent?.(parsed);
+          } catch (e) {
+            if (e instanceof PantheonApiError) throw e;
+            // Ignore parse errors for SSE ping frames etc.
+          }
+        }
+      }
+    }
+
+    return lastMessage;
+  }
+
+  // ── Workspaces ────────────────────────────────────────────────────
+
+  async function listWorkspaces(): Promise<PantheonWorkspace[]> {
+    return request<PantheonWorkspace[]>("/backend/workspaces");
+  }
+
+  async function createWorkspace(data: {
+    name: string;
+    mode: string;
+    local_path?: string;
+    repo_url?: string;
+  }): Promise<PantheonWorkspace> {
+    return request<PantheonWorkspace>("/backend/workspaces", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async function getWorkspace(id: string): Promise<PantheonWorkspace> {
+    return request<PantheonWorkspace>(`/backend/workspaces/${id}`);
+  }
+
+  async function updateWorkspace(
+    id: string,
+    data: Partial<PantheonWorkspace>,
+  ): Promise<PantheonWorkspace> {
+    return request<PantheonWorkspace>(`/backend/workspaces/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async function deleteWorkspace(id: string): Promise<void> {
+    await request(`/backend/workspaces/${id}`, { method: "DELETE" });
+  }
+
+  // ── Dual-mode (local/remote) ─────────────────────────────────────
+
+  async function postLocalPartEvent(
+    conversationId: string,
+    data: { message_key: string; part_id: string; part: Record<string, any>; is_final: boolean },
+  ): Promise<void> {
+    await request(`${OW_API}/conversations/${conversationId}/messages/local-part-event`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async function handoverConversation(
+    conversationId: string,
+    mode: "local" | "remote",
+  ): Promise<PantheonConversation> {
+    return request<PantheonConversation>(
+      `${OW_API}/conversations/${conversationId}/handover`,
+      { method: "POST", body: JSON.stringify({ mode }) },
+    );
+  }
+
+  async function delegateConversation(
+    conversationId: string,
+    mode: "local" | "remote",
+    pixieId?: string,
+  ): Promise<{ source: PantheonConversation; delegate: PantheonConversation }> {
+    return request<{ source: PantheonConversation; delegate: PantheonConversation }>(
+      `${OW_API}/conversations/${conversationId}/delegate`,
+      { method: "POST", body: JSON.stringify({ mode, pixie_id: pixieId }) },
+    );
+  }
+
+  async function getWorkspacePixie(
+    workspaceId: string,
+  ): Promise<{ id: string; nightshift_api_key: string }> {
+    return request<{ id: string; nightshift_api_key: string }>(
+      `/backend/workspaces/${workspaceId}/pixie`,
+    );
+  }
+
+  async function getDelegationContext(conversationId: string): Promise<any> {
+    return request<any>(
+      `${OW_API}/conversations/${conversationId}/delegation-context`,
+    );
+  }
+
+  return {
+    getToken,
+    isLoggedIn,
+    loginLocalhost,
+    exchangeCode,
+    me,
+    clearToken,
+    listAgents,
+    listConversations,
+    createConversation,
+    getConversation,
+    updateConversation,
+    deleteConversation,
+    getMessages,
+    sendMessage,
+    sendMessageStreaming,
+    listWorkspaces,
+    createWorkspace,
+    getWorkspace,
+    updateWorkspace,
+    deleteWorkspace,
+    postLocalPartEvent,
+    handoverConversation,
+    delegateConversation,
+    getWorkspacePixie,
+    getDelegationContext,
+  };
+}
+
+export type PantheonClient = ReturnType<typeof createPantheonClient>;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+export class PantheonAuthError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PantheonAuthError";
+  }
+}
+
+export class PantheonApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PantheonApiError";
+  }
+}
