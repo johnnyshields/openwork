@@ -16,13 +16,26 @@ const readCargoVersion = (path) => {
   return match ? match[1] : null;
 };
 
-const appPkg = readJson(resolve(root, "packages", "app", "package.json"));
-const desktopPkg = readJson(resolve(root, "packages", "desktop", "package.json"));
-const orchestratorPkg = readJson(resolve(root, "packages", "orchestrator", "package.json"));
-const serverPkg = readJson(resolve(root, "packages", "server", "package.json"));
-const opencodeRouterPkg = readJson(resolve(root, "packages", "opencode-router", "package.json"));
-const tauriConfig = readJson(resolve(root, "packages", "desktop", "src-tauri", "tauri.conf.json"));
-const cargoVersion = readCargoVersion(resolve(root, "packages", "desktop", "src-tauri", "Cargo.toml"));
+const appPkg = readJson(resolve(root, "apps", "app", "package.json"));
+const desktopPkg = readJson(resolve(root, "apps", "desktop", "package.json"));
+const orchestratorPkg = readJson(
+  resolve(root, "apps", "orchestrator", "package.json"),
+);
+const pinnedOpencodeVersion = String(
+  readJson(resolve(root, "constants.json")).opencodeVersion ?? "",
+)
+  .trim()
+  .replace(/^v/, "");
+const serverPkg = readJson(resolve(root, "apps", "server", "package.json"));
+const opencodeRouterPkg = readJson(
+  resolve(root, "apps", "opencode-router", "package.json"),
+);
+const tauriConfig = readJson(
+  resolve(root, "apps", "desktop", "src-tauri", "tauri.conf.json"),
+);
+const cargoVersion = readCargoVersion(
+  resolve(root, "apps", "desktop", "src-tauri", "Cargo.toml"),
+);
 
 const versions = {
   app: appPkg.version ?? null,
@@ -32,12 +45,10 @@ const versions = {
   server: serverPkg.version ?? null,
   orchestrator: orchestratorPkg.version ?? null,
   opencodeRouter: opencodeRouterPkg.version ?? null,
-  opencode: {
-    desktop: desktopPkg.opencodeVersion ?? null,
-    orchestrator: orchestratorPkg.opencodeVersion ?? null,
-  },
+  opencode: pinnedOpencodeVersion || null,
   opencodeRouterVersionPinned: desktopPkg.opencodeRouterVersion ?? null,
-  orchestratorOpenworkServerRange: orchestratorPkg.dependencies?.["openwork-server"] ?? null,
+  orchestratorOpenworkServerRange:
+    orchestratorPkg.dependencies?.["openwork-server"] ?? null,
 };
 
 const checks = [];
@@ -58,7 +69,9 @@ addCheck(
 );
 addCheck(
   "App/openwork-orchestrator versions match",
-  versions.app && versions.orchestrator && versions.app === versions.orchestrator,
+  versions.app &&
+    versions.orchestrator &&
+    versions.app === versions.orchestrator,
   `${versions.app ?? "?"} vs ${versions.orchestrator ?? "?"}`,
 );
 addCheck(
@@ -68,7 +81,9 @@ addCheck(
 );
 addCheck(
   "App/opencode-router versions match",
-  versions.app && versions.opencodeRouter && versions.app === versions.opencodeRouter,
+  versions.app &&
+    versions.opencodeRouter &&
+    versions.app === versions.opencodeRouter,
   `${versions.app ?? "?"} vs ${versions.opencodeRouter ?? "?"}`,
 );
 addCheck(
@@ -83,20 +98,20 @@ addCheck(
 );
 addCheck(
   "OpenCodeRouter version pinned in desktop",
-  versions.opencodeRouter && versions.opencodeRouterVersionPinned && versions.opencodeRouter === versions.opencodeRouterVersionPinned,
+  versions.opencodeRouter &&
+    versions.opencodeRouterVersionPinned &&
+    versions.opencodeRouter === versions.opencodeRouterVersionPinned,
   `${versions.opencodeRouterVersionPinned ?? "?"} vs ${versions.opencodeRouter ?? "?"}`,
 );
-if (versions.opencode.desktop || versions.opencode.orchestrator) {
+if (versions.opencode) {
   addCheck(
-    "OpenCode version matches (desktop/orchestrator)",
-    versions.opencode.desktop &&
-      versions.opencode.orchestrator &&
-      versions.opencode.desktop === versions.opencode.orchestrator,
-    `${versions.opencode.desktop ?? "?"} vs ${versions.opencode.orchestrator ?? "?"}`,
+    "OpenCode version pin exists",
+    Boolean(versions.opencode),
+    String(versions.opencode),
   );
 } else {
   addWarning(
-    "OpenCode version is not pinned (packages/desktop + packages/orchestrator). Sidecar bundling will default to the latest OpenCode release at build time.",
+    "OpenCode version is not pinned in constants.json.",
   );
 }
 
@@ -105,7 +120,9 @@ const openworkServerPinned = /^\d+\.\d+\.\d+/.test(openworkServerRange);
 if (!openworkServerRange) {
   addWarning("openwork-orchestrator is missing an openwork-server dependency.");
 } else if (!openworkServerPinned) {
-  addWarning(`openwork-orchestrator openwork-server dependency is not pinned (${openworkServerRange}).`);
+  addWarning(
+    `openwork-orchestrator openwork-server dependency is not pinned (${openworkServerRange}).`,
+  );
 } else {
   addCheck(
     "Openwork-server dependency matches server version",
@@ -116,7 +133,7 @@ if (!openworkServerRange) {
 
 const sidecarManifestPath = resolve(
   root,
-  "packages",
+  "apps",
   "orchestrator",
   "dist",
   "sidecars",
@@ -152,7 +169,9 @@ if (existsSync(sidecarManifestPath)) {
 }
 
 if (!process.env.SOURCE_DATE_EPOCH) {
-  addWarning("SOURCE_DATE_EPOCH is not set (sidecar manifests will include current time).");
+  addWarning(
+    "SOURCE_DATE_EPOCH is not set (sidecar manifests will include current time).",
+  );
 }
 
 const report = { ok, versions, checks, warnings };

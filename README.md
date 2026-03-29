@@ -1,17 +1,12 @@
-[![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/VEhNQXxYMB)
+> OpenWork is the open source alternative to Claude Cowork/Codex (desktop app).
 
-English | [简体中文](./README_ZH.md) | [繁體中文](./README_ZH_hk.md)
-
-# OpenWork
-
-> OpenWork helps you run your agents, skills, and MCP. It's an open-source alternative to Claude Cowork/Codex (desktop app).
 
 ## Core Philosophy
 
 - Local-first, cloud-ready: OpenWork runs on your machine in one click. Send a message instantly.
 - Composable: desktop app, WhatsApp/Slack/Telegram connector, or server. Use what fits, no lock-in.
 - Ejectable: OpenWork is powered by OpenCode, so everything OpenCode can do works in OpenWork, even without a UI yet.
-- Sharing is caring: start solo, then share. One CLI or desktop command spins up an instantly shareable instance.
+- Sharing is caring: start solo on localhost, then explicitly opt into remote sharing when you need it.
 
 <p align="center">
   <img src="./app-demo.gif" alt="OpenWork demo" width="800" />
@@ -20,19 +15,14 @@ English | [简体中文](./README_ZH.md) | [繁體中文](./README_ZH_hk.md)
 OpenWork is designed around the idea that you can easily ship your agentic workflows as a repeatable, productized process.
 
 ## Alternate UIs
-
-- **OpenCode Router (WhatsApp bot)**: a lightweight WhatsApp bridge for a running OpenCode server. Install with:
-  - `curl -fsSL https://raw.githubusercontent.com/different-ai/opencode-router/dev/install.sh | bash`
-  - run `opencode-router setup`, then `opencode-router whatsapp login`, then `opencode-router start`
-  - full setup: https://github.com/different-ai/opencode-router/blob/dev/README.md
 - **OpenWork Orchestrator (CLI host)**: run OpenCode + OpenWork server without the desktop UI.
   - install: `npm install -g openwork-orchestrator`
   - run: `openwork start --workspace /path/to/workspace --approval auto`
-  - docs: [packages/orchestrator/README.md](./packages/orchestrator/README.md)
+  - docs: [apps/orchestrator/README.md](./apps/orchestrator/README.md)
 
 ## Quick start
 
-Download the dmg here https://github.com/different-ai/openwork/releases (or install from source below)
+Download the correct version in [here](https://openworklabs.com/download), in the latest [releases](https://github.com/different-ai/openwork/releases) or install from source below.
 
 ## Why
 
@@ -97,7 +87,7 @@ pnpm install --frozen-lockfile
 
 which bun
 bun --version
-pnpm --filter @different-ai/openwork exec tauri --version
+pnpm --filter @openwork/desktop exec tauri --version
 ```
 
 ### Install
@@ -106,7 +96,7 @@ pnpm --filter @different-ai/openwork exec tauri --version
 pnpm install
 ```
 
-OpenWork now lives in `packages/app` (UI) and `packages/desktop` (desktop shell).
+OpenWork now lives in `apps/app` (UI) and `apps/desktop` (desktop shell).
 
 ### Run (Desktop)
 
@@ -128,7 +118,7 @@ All repo `dev` entrypoints now opt into the same dev-mode isolation so local tes
 
 ```bash
 sudo pacman -S --needed webkit2gtk-4.1
-yay -s opencode # Releases version
+curl -fsSL https://opencode.ai/install | bash -s -- --version "$(node -e "const fs=require('fs'); const parsed=JSON.parse(fs.readFileSync('constants.json','utf8')); process.stdout.write(String(parsed.opencodeVersion||'').trim().replace(/^v/,''));")" --no-modify-path
 ```
 
 ## Architecture (high-level)
@@ -152,7 +142,7 @@ This lets you run agentic workflows, send prompts, and see progress entirely on 
 The folder picker uses the Tauri dialog plugin.
 Capability permissions are defined in:
 
-- `packages/desktop/src-tauri/capabilities/default.json`
+- `apps/desktop/src-tauri/capabilities/default.json`
 
 ## OpenPackage Notes
 
@@ -216,7 +206,7 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 openwork
 - Run `pnpm install` once per checkout, then verify your change with `pnpm typecheck` plus `pnpm test:e2e` (or the targeted subset of scripts) before opening a PR.
 - Use `.github/pull_request_template.md` when opening PRs and include exact commands, outcomes, manual verification steps, and evidence.
 - If CI fails, classify failures in the PR body as either code-related regressions or external/environment/auth blockers.
-- Add new PRDs to `packages/app/pr/<name>.md` following the `.opencode/skills/prd-conventions/SKILL.md` conventions described in `AGENTS.md`.
+- Add new PRDs to `apps/app/pr/<name>.md` following the `.opencode/skills/prd-conventions/SKILL.md` conventions described in `AGENTS.md`.
 
 Community docs:
 
@@ -235,7 +225,7 @@ First contribution checklist:
 
 ## For Teams & Businesses
 
-Interested in using OpenWork in your organization? We'd love to hear from you — reach out at [benjamin.shafii@gmail.com](mailto:benjamin.shafii@gmail.com) to chat about your use case.
+Interested in using OpenWork in your organization? We'd love to hear from you — reach out at [ben@openworklabs.com](mailto:ben@openworklabs.com) to chat about your use case.
 
 ## License
 

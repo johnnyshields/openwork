@@ -9,7 +9,7 @@ on:
 jobs:
   triage-issue:
     if: github.event_name == 'issues'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       issues: write
@@ -20,7 +20,9 @@ jobs:
           fetch-depth: 1
 
       - name: Install opencode
-        run: curl -fsSL https://opencode.ai/install | bash
+        run: |
+          version="$(node -e "const fs=require('fs'); const parsed=JSON.parse(fs.readFileSync('constants.json','utf8')); process.stdout.write(String(parsed.opencodeVersion||'').trim().replace(/^v/,''));")"
+          curl -fsSL https://opencode.ai/install | bash -s -- --version "$version" --no-modify-path
 
       - name: Triage issue
         env:
@@ -37,7 +39,7 @@ jobs:
 
   duplicate-prs:
     if: github.event_name == 'pull_request_target' && github.event.pull_request.user.login != 'opencode-agent[bot]'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       pull-requests: write
@@ -48,7 +50,9 @@ jobs:
           fetch-depth: 1
 
       - name: Install opencode
-        run: curl -fsSL https://opencode.ai/install | bash
+        run: |
+          version="$(node -e "const fs=require('fs'); const parsed=JSON.parse(fs.readFileSync('constants.json','utf8')); process.stdout.write(String(parsed.opencodeVersion||'').trim().replace(/^v/,''));")"
+          curl -fsSL https://opencode.ai/install | bash -s -- --version "$version" --no-modify-path
 
       - name: Build prompt
         env:

@@ -38,7 +38,7 @@ User mental model:
 * A worker is a remote runtime destination.
 * Connecting to a worker happens through `Add worker` -> `Connect remote` using URL + token (or deep link).
 
-Read INFRASTRUCTURE.md
+Read `ARCHITECTURE.md` for runtime flow, server-vs-shell ownership, and architecture behavior. Read `INFRASTRUCTURE.md` for deployment and control-plane details.
 
 ## Why OpenWork Exists
 
@@ -111,7 +111,7 @@ Design principles for hot reload:
 * **Session-aware**: when sessions are actively running, queue reload signals. Promote to visible reload (toast or auto-reload) only after all active sessions finish. This avoids interrupting in-flight tool calls.
 * **Auto-reload setting**: each workspace can opt into automatic reload via `.opencode/openwork.json` (`reload.auto`). When enabled, the engine reloads automatically once queued signals are ready and no sessions are active.
 * **Session continuity**: before reload, capture running session IDs, agents, and models. After reload, optionally relaunch those sessions so the user experiences seamless continuity.
-* **Per-workspace isolation**: the desktop file watcher only watches the active workspace root and its `.opencode/` directory. The server reload event store is already keyed by `workspaceId`.
+* **Per-workspace isolation**: the desktop file watcher only watches the runtime-connected workspace root and its `.opencode/` directory. This can differ briefly from the UI-selected workspace while the user browses another workspace. The server reload event store is already keyed by `workspaceId`.
 
 ## Technology Stack
 
@@ -126,12 +126,26 @@ Design principles for hot reload:
 ## Repository Guidance
 
 * Use `VISION.md`, `PRINCIPLES.md`, `PRODUCT.md`, `ARCHITECTURE.md`, and `INFRASTRUCTURE.md` to understand the "why" and requirements so you can guide your decisions.
+* Treat `ARCHITECTURE.md` as the authoritative system design source for runtime flow, server ownership, filesystem mutation policy, and agent/runtime boundaries. If those behaviors change, update `ARCHITECTURE.md` in the same task.
 * Use `DESIGN-LANGUAGE.md` as the default visual reference for OpenWork app and landing work.
 * For OpenWork session-surface details, also reference `packages/docs/orbita-layout-style.mdx`.
 
+## App Architecture (CUPID)
+
+For `apps/app/src/app/**`, use CUPID: small public surfaces, intention-revealing names, minimal dependencies, predictable ownership, and domain-based structure.
+
+* Organize app code by product domain and app behavior, not generic buckets like `pages`, `hooks`, `utils`, or app-wide props.
+* Prefer a thin shell, domain modules, and tiny shared primitives.
+* Colocate state, UI, helpers, and server/client adapters with the domain that owns the workflow.
+* Treat shared utilities as a last resort; promote only after multiple real consumers exist.
+* Cross-domain imports should go through a small public API, not another domain's internals.
+* Keep global shell code thin and use it for routing, top-level layout, runtime wiring, and shared reload/update surfaces only.
+* Domain map: shell, workspace, session, connections, automations, cloud, app-settings, and kernel.
+* When changing app architecture, moving ownership, or editing hot spots like `app.tsx`, `pages/dashboard.tsx`, `pages/session.tsx`, or `pages/settings.tsx`, consult the workspace-root skill at `../../.opencode/skills/cupid-app-architecture/SKILL.md` first.
+
 ## Dev Debugging
 
-* If you change `packages/server/src`, rebuild the OpenWork server binary (`pnpm --filter openwork-server build:bin`) because `openwork` (openwork-orchestrator) runs the compiled server, not the TS sources.
+* If you change `apps/server/src`, rebuild the OpenWork server binary (`pnpm --filter openwork-server build:bin`) because `openwork` (openwork-orchestrator) runs the compiled server, not the TS sources.
 
 ## Local Structure
 
@@ -144,7 +158,7 @@ openwork/
   ARCHITECTURE.md               # Runtime modes and OpenCode integration
   .gitignore                    # Ignores vendor/opencode, node_modules, etc.
   .opencode/
-  packages/
+  apps/
     app/
       src/
       public/
@@ -153,6 +167,9 @@ openwork/
       package.json
     desktop/
       src-tauri/
+      package.json
+    server/
+      src/
       package.json
 ```
 
@@ -190,7 +207,7 @@ Key primitives to expose:
 
 ## Skill: SolidJS Patterns
 
-When editing SolidJS UI (`packages/app/src/**/*.tsx`), consult:
+When editing SolidJS UI (`apps/app/src/**/*.tsx`), consult:
 
 * `.opencode/skills/solidjs-patterns/SKILL.md`
 
@@ -206,11 +223,11 @@ OpenWork releases are built by GitHub Actions (`Release App`). A release is trig
 1.  Ensure `main` is green and up to date.
 2.  Bump versions (keep these in sync):
 
-* `packages/app/package.json` (`version`)
-* `packages/desktop/package.json` (`version`)
-* `packages/orchestrator/package.json` (`version`, publishes as `openwork-orchestrator`)
-* `packages/desktop/src-tauri/tauri.conf.json` (`version`)
-* `packages/desktop/src-tauri/Cargo.toml` (`version`)
+* `apps/app/package.json` (`version`)
+* `apps/desktop/package.json` (`version`)
+* `apps/orchestrator/package.json` (`version`, publishes as `openwork-orchestrator`)
+* `apps/desktop/src-tauri/tauri.conf.json` (`version`)
+* `apps/desktop/src-tauri/Cargo.toml` (`version`)
 
 You can bump all three non-interactively with:
 
@@ -244,11 +261,11 @@ Confirm the DMG assets are attached and versioned correctly.
 This is usually covered by `Release App` when `publish_sidecars` + `publish_npm` are enabled. Use `.opencode/skills/openwork-orchestrator-npm-publish/SKILL.md` for manual recovery or one-off publishing.
 
 1.  Ensure the default branch is up to date and clean.
-2.  Bump `packages/orchestrator/package.json` (`version`).
+2.  Bump `apps/orchestrator/package.json` (`version`).
 3.  Commit the bump.
 4.  Build and upload sidecar assets for the same version tag:
     * `pnpm --filter openwork-orchestrator build:sidecars`
-    * `gh release create openwork-orchestrator-vX.Y.Z packages/orchestrator/dist/sidecars/* --repo different-ai/openwork`
+    * `gh release create openwork-orchestrator-vX.Y.Z apps/orchestrator/dist/sidecars/* --repo different-ai/openwork`
 5.  Publish:
     * `pnpm --filter openwork-orchestrator publish --access public`
 6.  Verify:
