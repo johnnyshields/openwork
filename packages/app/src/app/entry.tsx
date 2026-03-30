@@ -1,4 +1,4 @@
-import App from "./app";
+import { lazy } from "solid-js";
 import { GlobalSDKProvider } from "./context/global-sdk";
 import { GlobalSyncProvider } from "./context/global-sync";
 import { LocalProvider } from "./context/local";
@@ -7,21 +7,30 @@ import { isPantheonMode } from "./context/pantheon";
 import { PantheonSDKProvider } from "./context/pantheon-sdk";
 import { isTauriRuntime } from "./utils";
 
+const LazyApp = lazy(() => import("./app"));
+
 export default function AppEntry() {
-  // Pantheon mode: full OpenWork UI backed by Pantheon API
-  if (isPantheonMode()) {
+  const pantheon = isPantheonMode();
+  const tauri = isTauriRuntime();
+  const viteUrl = import.meta.env?.VITE_OPENWORK_URL ?? "(unset)";
+  console.warn(`[entry] isPantheonMode=${pantheon} isTauri=${tauri} VITE_OPENWORK_URL=${viteUrl}`);
+
+  // Pantheon mode: Pantheon login gates the normal OpenWork UI
+  if (pantheon) {
+    console.warn("[entry] → rendering PantheonSDKProvider path");
     return (
       <PantheonSDKProvider>
         <LocalProvider>
-          <App />
+          <LazyApp />
         </LocalProvider>
       </PantheonSDKProvider>
     );
   }
 
   // OpenCode mode (Tauri desktop / standalone)
+  console.warn("[entry] → rendering OpenCode/Server path");
   const defaultUrl = (() => {
-    if (isTauriRuntime()) return "http://127.0.0.1:4096";
+    if (tauri) return "http://127.0.0.1:4096";
 
     if (import.meta.env.PROD && typeof window !== "undefined") {
       return `${window.location.origin}/opencode`;
@@ -33,13 +42,14 @@ export default function AppEntry() {
         : "";
     return envUrl || "http://127.0.0.1:4096";
   })();
+  console.warn(`[entry] OpenCode defaultUrl=${defaultUrl}`);
 
   return (
     <ServerProvider defaultUrl={defaultUrl}>
       <GlobalSDKProvider>
         <GlobalSyncProvider>
           <LocalProvider>
-            <App />
+            <LazyApp />
           </LocalProvider>
         </GlobalSyncProvider>
       </GlobalSDKProvider>

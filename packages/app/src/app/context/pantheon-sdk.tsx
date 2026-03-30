@@ -9,6 +9,7 @@
 import {
   createEffect,
   createSignal,
+  Show,
   type ParentProps,
 } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -185,15 +186,20 @@ export function PantheonSDKProvider(props: ParentProps) {
         }
         // Try localhost login first (works when PANTHEON_LOCALHOST_MODE=true)
         try {
+          console.warn("[pantheon-sdk] trying localhost login...");
           const result = await client.loginLocalhost();
+          console.warn("[pantheon-sdk] localhost login result:", result.token ? "got token" : "no token", "user:", result.user?.username);
           if (result.token) {
+            console.warn("[pantheon-sdk] login success, completing login");
             completeLogin();
             return;
           }
-        } catch {
+        } catch (e) {
+          console.warn("[pantheon-sdk] localhost login failed:", e, "— falling through to OIDC");
           // Not in localhost mode — fall through to OIDC
         }
         // No valid token — show login UI (not a redirect)
+        console.warn("[pantheon-sdk] no valid token, showing login UI");
         setLoginState("needs-login" as any);
       } catch (e) {
         loginInFlight = false;
@@ -399,12 +405,12 @@ export function PantheonSDKProvider(props: ParentProps) {
     <ServerContext.Provider value={serverValue}>
       <GlobalSDKContext.Provider value={sdkValue}>
         <GlobalSyncContext.Provider value={syncValue}>
-          {loginState() === "pending" && (
+          <Show when={loginState() === "pending"}>
             <div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#888">
               Connecting to Pantheon...
             </div>
-          )}
-          {(loginState() as string) === "needs-login" && (
+          </Show>
+          <Show when={(loginState() as string) === "needs-login"}>
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px">
               <div style="color:#aaa;font-size:14px">Sign in to continue</div>
               <button
@@ -414,8 +420,8 @@ export function PantheonSDKProvider(props: ParentProps) {
                 Sign in with Pantheon
               </button>
             </div>
-          )}
-          {loginState() === "error" && (
+          </Show>
+          <Show when={loginState() === "error"}>
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:12px">
               <div style="color:#f66">Login failed: {loginError()}</div>
               <button
@@ -429,8 +435,10 @@ export function PantheonSDKProvider(props: ParentProps) {
                 Retry login
               </button>
             </div>
-          )}
-          {loginState() === "ok" && props.children}
+          </Show>
+          <Show when={loginState() === "ok"}>
+            {props.children}
+          </Show>
         </GlobalSyncContext.Provider>
       </GlobalSDKContext.Provider>
     </ServerContext.Provider>

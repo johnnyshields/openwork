@@ -2639,6 +2639,8 @@ export default function App() {
     developerMode,
   });
 
+  console.warn(`[app] isPantheonMode=${isPantheonMode()} isTauri=${isTauriRuntime()}`);
+
   // In Pantheon mode, set the client from GlobalSDK adapter immediately
   // (normally the workspace store sets it during connect(), but we skip that)
   if (isPantheonMode()) {

@@ -91,6 +91,11 @@ fn stop_managed_services(app_handle: &tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn log_from_webview(level: String, msg: String) {
+    println!("[webview:{}] {}", level, msg);
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
@@ -105,8 +110,53 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build());
 
     let app = builder
-        .setup(|_| {
+        .on_page_load(|webview, payload| {
+            println!("[tauri:page_load] url={} event={:?}", payload.url(), payload.event());
+        })
+        .setup(|app| {
             set_dev_app_name();
+            println!("[tauri] setup complete, checking windows...");
+
+            if let Some(window) = app.get_webview_window("main") {
+                println!("[tauri] main window found, injecting logger...");
+                let _ = window.eval(r#"
+                    (function() {
+                        const origLog = console.log;
+                        const origWarn = console.warn;
+                        const origError = console.error;
+                        function fmt() {
+                            return Array.from(arguments).map(a => {
+                                try { return typeof a === 'string' ? a : JSON.stringify(a); }
+                                catch { return String(a); }
+                            }).join(' ');
+                        }
+                        console.log = function() { origLog.apply(console, arguments); window.__TAURI_INTERNALS__?.invoke('log_from_webview', {level:'log', msg: fmt.apply(null, arguments)}).catch(()=>{}); };
+                        console.warn = function() { origWarn.apply(console, arguments); window.__TAURI_INTERNALS__?.invoke('log_from_webview', {level:'warn', msg: fmt.apply(null, arguments)}).catch(()=>{}); };
+                        console.error = function() { origError.apply(console, arguments); window.__TAURI_INTERNALS__?.invoke('log_from_webview', {level:'error', msg: fmt.apply(null, arguments)}).catch(()=>{}); };
+
+                        const origFetch = window.fetch;
+                        window.fetch = async function(input, init) {
+                            const url = typeof input === 'string' ? input : input?.url || String(input);
+                            const method = init?.method || 'GET';
+                            origWarn('[fetch] >>>', method, url);
+                            try {
+                                const resp = await origFetch.apply(this, arguments);
+                                origWarn('[fetch] <<<', method, url, resp.status, resp.statusText);
+                                return resp;
+                            } catch(e) {
+                                origError('[fetch] !!!', method, url, String(e));
+                                throw e;
+                            }
+                        };
+
+                        origWarn('[webview-logger] installed');
+                    })();
+                "#);
+                println!("[tauri] webview logger script injected");
+            } else {
+                println!("[tauri] WARNING: main window not found!");
+            }
+
             Ok(())
         })
         .manage(EngineManager::default())
@@ -177,7 +227,8 @@ pub fn run() {
             opencode_mcp_auth,
             scheduler_list_jobs,
             scheduler_delete_job,
-            set_window_decorations
+            set_window_decorations,
+            log_from_webview
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenWork");
