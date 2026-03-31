@@ -1,4 +1,7 @@
 import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon mode check to hide remote access option
+import { isPantheonMode } from "../utils";
+// END-PANTHEON-OVERRIDE
 import { ArrowLeft, MonitorUp, Rocket, X } from "lucide-solid";
 
 import ShareWorkspaceAccessPanel from "./share-workspace-access-panel";
@@ -164,12 +167,16 @@ export default function ShareWorkspaceModal(props: ShareWorkspaceModalProps) {
                   icon={Rocket}
                   onClick={() => setActiveView("template")}
                 />
+                {/* BEGIN-PANTHEON-OVERRIDE — hide remote access option in Pantheon mode */}
+                <Show when={!isPantheonMode()}>
                 <WorkspaceOptionCard
                   title="Access workspace remotely"
                   description="Reveal the live connection details needed to reach this running workspace from another machine."
                   icon={MonitorUp}
                   onClick={() => setActiveView("access")}
                 />
+                </Show>
+                {/* END-PANTHEON-OVERRIDE */}
               </div>
             </Show>
 

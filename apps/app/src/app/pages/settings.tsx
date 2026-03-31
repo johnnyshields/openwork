@@ -12,6 +12,9 @@ import {
 import {
   formatBytes,
   formatRelativeTime,
+  // BEGIN-PANTHEON-OVERRIDE — import Pantheon mode check for hiding startup/remote UI
+  isPantheonMode,
+  // END-PANTHEON-OVERRIDE
   isTauriRuntime,
   isWindowsPlatform,
 } from "../utils";
@@ -735,6 +738,9 @@ export default function SettingsView(props: SettingsViewProps) {
   };
 
   const handleOpenworkServerRestart = async () => {
+    // BEGIN-PANTHEON-OVERRIDE — skip local server restart in Pantheon mode
+    if (isPantheonMode()) return;
+    // END-PANTHEON-OVERRIDE
     if (openworkServerRestarting() || !isTauriRuntime()) return;
     setOpenworkServerRestarting(true);
     setOpenworkServerRestartError(null);
@@ -752,6 +758,9 @@ export default function SettingsView(props: SettingsViewProps) {
   };
 
   const handleOpenCodeRestart = async () => {
+    // BEGIN-PANTHEON-OVERRIDE — skip local engine restart in Pantheon mode
+    if (isPantheonMode()) return;
+    // END-PANTHEON-OVERRIDE
     if (opencodeRestarting() || !isTauriRuntime()) return;
     setOpencodeRestarting(true);
     setOpencodeRestartError(null);
@@ -2639,6 +2648,8 @@ export default function SettingsView(props: SettingsViewProps) {
 
 
 
+                {/* BEGIN-PANTHEON-OVERRIDE — hide startup preference selector in Pantheon mode (Pantheon IS the server) */}
+                <Show when={!isPantheonMode()}>
                 <div class="bg-gray-2/30 border border-gray-6/50 rounded-2xl p-5 space-y-3">
                   <div class="text-sm font-medium text-gray-12">Startup</div>
 
@@ -2689,6 +2700,8 @@ export default function SettingsView(props: SettingsViewProps) {
                     choice on next launch.
                   </p>
                 </div>
+                </Show>
+                {/* END-PANTHEON-OVERRIDE */}
 
                 <Show
                   when={

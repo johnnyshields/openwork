@@ -1,5 +1,6 @@
 import {
   Match,
+  Show,
   Switch,
   createEffect,
   createMemo,
@@ -65,6 +66,9 @@ import {
   clearStartupPreference,
   deriveArtifacts,
   deriveWorkingFiles,
+  // BEGIN-PANTHEON-OVERRIDE — import Pantheon mode check for skipping local services and hiding remote UI
+  isPantheonMode,
+  // END-PANTHEON-OVERRIDE
   isTauriRuntime,
   normalizeDirectoryPath,
 } from "./utils";
@@ -1138,6 +1142,9 @@ export default function App() {
   });
 
   async function restartLocalServer() {
+    // BEGIN-PANTHEON-OVERRIDE — Pantheon IS the server; skip local service startup
+    if (isPantheonMode()) return false;
+    // END-PANTHEON-OVERRIDE
     const activeWorkspace = workspaceStore.selectedWorkspaceDisplay();
     const activeLocalPath =
       activeWorkspace.workspaceType === "local" ? workspaceStore.selectedWorkspacePath().trim() : "";
@@ -2558,6 +2565,8 @@ export default function App() {
         }}
       />
 
+            {/* BEGIN-PANTHEON-OVERRIDE — hide remote workspace creation modal in Pantheon mode */}
+            <Show when={!isPantheonMode()}>
             <CreateRemoteWorkspaceModal
               open={workspaceStore.createRemoteWorkspaceOpen()}
               onClose={() => {
@@ -2571,6 +2580,8 @@ export default function App() {
                 (busyLabel() === "status.creating_workspace" || busyLabel() === "status.connecting")
               }
             />
+            </Show>
+            {/* END-PANTHEON-OVERRIDE */}
 
       <TopRightNotifications
         reloadOpen={reloadRequired("config", "mcp", "plugin", "skill", "agent", "command")}
@@ -2601,6 +2612,8 @@ export default function App() {
         onTitleChange={workspaceStore.setRenameWorkspaceName}
       />
 
+      {/* BEGIN-PANTHEON-OVERRIDE — hide remote workspace edit modal in Pantheon mode */}
+      <Show when={!isPantheonMode()}>
       <CreateRemoteWorkspaceModal
         open={workspaceStore.editRemoteWorkspaceOpen()}
         onClose={workspaceStore.closeWorkspaceConnectionSettings}
@@ -2614,6 +2627,8 @@ export default function App() {
         subtitle={t("dashboard.edit_remote_workspace_subtitle", currentLocale())}
         confirmLabel={t("dashboard.edit_remote_workspace_confirm", currentLocale())}
       />
+      </Show>
+      {/* END-PANTHEON-OVERRIDE */}
                 </StatusToastsProvider>
               </AutomationsProvider>
             </ExtensionsProvider>

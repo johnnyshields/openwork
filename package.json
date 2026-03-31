@@ -50,6 +50,9 @@
       "esbuild",
       "protobufjs"
     ],
+    "overrides": {
+      "rollup": "4.34.8"
+    },
     "patchedDependencies": {
       "@solidjs/router@0.15.4": "patches/@solidjs__router@0.15.4.patch"
     }

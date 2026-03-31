@@ -1,7 +1,9 @@
 import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 
 import type { StartupPreference, WorkspaceDisplay } from "../types";
-import { isTauriRuntime } from "../utils";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon mode helpers
+import { isPantheonMode, pantheonBaseUrl, isTauriRuntime } from "../utils";
+// END-PANTHEON-OVERRIDE
 import {
   openworkServerInfo,
   openworkServerRestart,
@@ -66,6 +68,9 @@ export function createOpenworkServerStore(options: {
   const [devtoolsWorkspaceId, setDevtoolsWorkspaceId] = createSignal<string | null>(null);
 
   const openworkServerBaseUrl = createMemo(() => {
+    // BEGIN-PANTHEON-OVERRIDE — use Pantheon API URL in Pantheon mode
+    if (isPantheonMode()) return `${pantheonBaseUrl()}/openwork/api`;
+    // END-PANTHEON-OVERRIDE
     const pref = options.startupPreference();
     const hostInfo = openworkServerHostInfo();
     const settingsUrl = normalizeOpenworkServerUrl(openworkServerSettings().urlOverride ?? "") ?? "";
@@ -77,6 +82,12 @@ export function createOpenworkServerStore(options: {
 
   const openworkServerAuth = createMemo(
     () => {
+      // BEGIN-PANTHEON-OVERRIDE — read JWT from Pantheon storage in Pantheon mode
+      if (isPantheonMode()) {
+        const jwt = (typeof window !== "undefined" ? window.localStorage.getItem("pantheon.jwt") : null)?.trim() ?? "";
+        return { token: jwt || undefined, hostToken: undefined };
+      }
+      // END-PANTHEON-OVERRIDE
       const pref = options.startupPreference();
       const hostInfo = openworkServerHostInfo();
       const settingsToken = openworkServerSettings().token?.trim() ?? "";
@@ -233,6 +244,9 @@ export function createOpenworkServerStore(options: {
   });
 
   createEffect(() => {
+    // BEGIN-PANTHEON-OVERRIDE — skip Tauri-only polling in Pantheon mode
+    if (isPantheonMode()) return;
+    // END-PANTHEON-OVERRIDE
     if (!isTauriRuntime()) return;
     if (!options.documentVisible()) return;
     let active = true;
@@ -255,6 +269,9 @@ export function createOpenworkServerStore(options: {
   });
 
   createEffect(() => {
+    // BEGIN-PANTHEON-OVERRIDE — skip Tauri port override in Pantheon mode
+    if (isPantheonMode()) return;
+    // END-PANTHEON-OVERRIDE
     if (!isTauriRuntime()) return;
     const hostInfo = openworkServerHostInfo();
     const port = hostInfo?.port;

@@ -3,7 +3,9 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 import { isWebDeployment } from "../lib/openwork-deployment";
-import { isTauriRuntime } from "../utils";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon mode check
+import { isPantheonMode, isTauriRuntime } from "../utils";
+// END-PANTHEON-OVERRIDE
 
 export function normalizeServerUrl(input: string) {
   const trimmed = input.trim();
@@ -63,12 +65,15 @@ export function ServerProvider(props: ParentProps & { defaultUrl: string }) {
     // In hosted web deployments served by OpenWork, OpenCode
     // traffic should go through the server proxy (usually same-origin `/opencode`).
     // Do not reuse any persisted localhost targets.
+    // BEGIN-PANTHEON-OVERRIDE — force proxy in Pantheon mode to use the Pantheon URL
     const forceProxy =
-      !isTauriRuntime() &&
-      isWebDeployment() &&
-      (import.meta.env.PROD ||
-        (typeof import.meta.env?.VITE_OPENWORK_URL === "string" &&
-          import.meta.env.VITE_OPENWORK_URL.trim().length > 0));
+      isPantheonMode() ||
+      (!isTauriRuntime() &&
+        isWebDeployment() &&
+        (import.meta.env.PROD ||
+          (typeof import.meta.env?.VITE_OPENWORK_URL === "string" &&
+            import.meta.env.VITE_OPENWORK_URL.trim().length > 0)));
+    // END-PANTHEON-OVERRIDE
     if (forceProxy && fallback) {
       setList([fallback]);
       setActiveRaw(fallback);
@@ -103,6 +108,11 @@ export function ServerProvider(props: ParentProps & { defaultUrl: string }) {
 
   const readOpenworkToken = () => {
     try {
+      // BEGIN-PANTHEON-OVERRIDE — prefer Pantheon JWT when in Pantheon mode
+      if (isPantheonMode()) {
+        return (window.localStorage.getItem("pantheon.jwt") ?? window.localStorage.getItem("openwork.server.token") ?? "").trim();
+      }
+      // END-PANTHEON-OVERRIDE
       return (window.localStorage.getItem("openwork.server.token") ?? "").trim();
     } catch {
       return "";
@@ -112,7 +122,9 @@ export function ServerProvider(props: ParentProps & { defaultUrl: string }) {
   const checkHealth = async (url: string) => {
     if (!url) return false;
     const token = readOpenworkToken();
-    const headers = token && url.includes("/opencode") ? { Authorization: `Bearer ${token}` } : undefined;
+    // BEGIN-PANTHEON-OVERRIDE — always attach Bearer token in Pantheon mode
+    const headers = token && (isPantheonMode() || url.includes("/opencode")) ? { Authorization: `Bearer ${token}` } : undefined;
+    // END-PANTHEON-OVERRIDE
     const client = createOpencodeClient({
       baseUrl: url,
       headers,

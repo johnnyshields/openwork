@@ -72,6 +72,20 @@ export function isTauriRuntime() {
   return typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__ != null;
 }
 
+// BEGIN-PANTHEON-OVERRIDE — detect when app is configured to use Pantheon as the server
+export function isPantheonMode() {
+  const url =
+    typeof import.meta.env?.VITE_PANTHEON_BASE_URL === "string"
+      ? import.meta.env.VITE_PANTHEON_BASE_URL.trim()
+      : "";
+  return url.length > 0;
+}
+
+export function pantheonBaseUrl() {
+  return (import.meta.env.VITE_PANTHEON_BASE_URL as string).trim().replace(/\/+$/, "");
+}
+// END-PANTHEON-OVERRIDE
+
 export function isWindowsPlatform() {
   if (typeof navigator === "undefined") return false;
 

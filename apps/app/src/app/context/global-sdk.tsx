@@ -12,6 +12,9 @@ import {
 
 import { usePlatform } from "./platform";
 import { useServer } from "./server";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon mode check
+import { isPantheonMode } from "../utils";
+// END-PANTHEON-OVERRIDE
 
 type GlobalSDKContextValue = {
   url: () => string;
@@ -38,15 +41,20 @@ export function GlobalSDKProvider(props: ParentProps) {
     const baseUrl = server.url;
     const isHealthy = server.healthy() === true;
 
+    // BEGIN-PANTHEON-OVERRIDE — prefer Pantheon JWT, always attach token in Pantheon mode
     const token = (() => {
       if (typeof window === "undefined") return "";
       try {
+        if (isPantheonMode()) {
+          return (window.localStorage.getItem("pantheon.jwt") ?? window.localStorage.getItem("openwork.server.token") ?? "").trim();
+        }
         return (window.localStorage.getItem("openwork.server.token") ?? "").trim();
       } catch {
         return "";
       }
     })();
-    const headers = token && baseUrl.includes("/opencode") ? { Authorization: `Bearer ${token}` } : undefined;
+    const headers = token && (isPantheonMode() || baseUrl.includes("/opencode")) ? { Authorization: `Bearer ${token}` } : undefined;
+    // END-PANTHEON-OVERRIDE
     setUrl(baseUrl);
 
     // Always keep the request client in sync with the active URL.

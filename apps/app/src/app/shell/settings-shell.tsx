@@ -11,6 +11,9 @@ import type {
 import {
   formatRelativeTime,
   getWorkspaceTaskLoadErrorDisplay,
+  // BEGIN-PANTHEON-OVERRIDE — import Pantheon mode check for hiding remote access UI
+  isPantheonMode,
+  // END-PANTHEON-OVERRIDE
   isTauriRuntime,
   isWindowsPlatform,
   normalizeDirectoryPath,
@@ -1310,7 +1313,8 @@ export default function SettingsShell(props: SettingsShellProps) {
           workspaceName={shareWorkspaceName()}
           workspaceDetail={shareWorkspaceDetail()}
           fields={shareFields()}
-          remoteAccess={shareWorkspace()?.workspaceType === "local"
+          // BEGIN-PANTHEON-OVERRIDE — hide remote access controls in Pantheon mode
+          remoteAccess={isPantheonMode() ? undefined : shareWorkspace()?.workspaceType === "local"
             ? {
                 enabled: props.openworkServerHostInfo?.remoteAccessEnabled === true,
                 busy: props.shareRemoteAccessBusy,
@@ -1318,6 +1322,7 @@ export default function SettingsShell(props: SettingsShellProps) {
                 onSave: props.saveShareRemoteAccess,
               }
             : undefined}
+          // END-PANTHEON-OVERRIDE
           note={shareNote()}
           onShareWorkspaceProfile={publishWorkspaceProfileLink}
           shareWorkspaceProfileBusy={shareWorkspaceProfileBusy()}

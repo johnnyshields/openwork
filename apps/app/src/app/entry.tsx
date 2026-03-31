@@ -4,10 +4,17 @@ import { GlobalSyncProvider } from "./context/global-sync";
 import { LocalProvider } from "./context/local";
 import { ServerProvider } from "./context/server";
 import { isWebDeployment } from "./lib/openwork-deployment";
-import { isTauriRuntime } from "./utils";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon auth gate and helpers
+import { PantheonAuthGate } from "./context/pantheon-auth";
+import { isPantheonMode, pantheonBaseUrl, isTauriRuntime } from "./utils";
+// END-PANTHEON-OVERRIDE
 
 export default function AppEntry() {
   const defaultUrl = (() => {
+    // BEGIN-PANTHEON-OVERRIDE — Pantheon mode takes priority over all other URL resolution
+    if (isPantheonMode()) return `${pantheonBaseUrl()}/opencode`;
+    // END-PANTHEON-OVERRIDE
+
     // Desktop app connects to the local OpenCode engine.
     if (isTauriRuntime()) return "http://127.0.0.1:4096";
 
@@ -40,7 +47,9 @@ export default function AppEntry() {
       <GlobalSDKProvider>
         <GlobalSyncProvider>
           <LocalProvider>
-            <App />
+            {/* BEGIN-PANTHEON-OVERRIDE — wrap App with auth gate in Pantheon mode */}
+            {isPantheonMode() ? <PantheonAuthGate><App /></PantheonAuthGate> : <App />}
+            {/* END-PANTHEON-OVERRIDE */}
           </LocalProvider>
         </GlobalSyncProvider>
       </GlobalSDKProvider>

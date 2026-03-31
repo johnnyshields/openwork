@@ -10,6 +10,9 @@ import { nativeDeepLinkEvent, pushPendingDeepLinks } from "./app/lib/deep-link-b
 import { getOpenWorkDeployment } from "./app/lib/openwork-deployment";
 import { isTauriRuntime } from "./app/utils";
 import { initLocale } from "./i18n";
+// BEGIN-PANTHEON-OVERRIDE — import OIDC callback route
+import AuthCallback from "./app/pages/auth-callback";
+// END-PANTHEON-OVERRIDE
 
 bootstrapTheme();
 initLocale();
@@ -148,6 +151,9 @@ render(
   () => (
     <PlatformProvider value={platform}>
       <RouterComponent root={AppEntry}>
+        {/* BEGIN-PANTHEON-OVERRIDE — OIDC callback route */}
+        <Route path="/auth/callback" component={AuthCallback} />
+        {/* END-PANTHEON-OVERRIDE */}
         <Route path="*all" component={() => null} />
       </RouterComponent>
     </PlatformProvider>
