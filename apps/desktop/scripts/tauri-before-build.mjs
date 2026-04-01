@@ -15,4 +15,7 @@ const runPnpm = (args) => {
 };
 
 runPnpm(["-C", "../..", "--filter", "@openwork/desktop", "run", "prepare:sidecar"]);
-runPnpm(["--filter", "@openwork/app", "build"]);
+// BEGIN-PANTHEON-OVERRIDE — pass build mode to select .env.development or .env.production
+const buildMode = process.env.BUILD_MODE || "production";
+runPnpm(["--filter", "@openwork/app", "build", "--", "--mode", buildMode]);
+// END-PANTHEON-OVERRIDE

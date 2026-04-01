@@ -32,11 +32,18 @@ async function authFetch(
   input: string,
   init?: RequestInit,
 ): Promise<Response> {
-  if (isTauriRuntime()) {
-    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-    return tauriFetch(input, init);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const merged = { ...init, signal: controller.signal };
+  try {
+    if (isTauriRuntime()) {
+      const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+      return await tauriFetch(input, merged);
+    }
+    return await globalThis.fetch(input, merged);
+  } finally {
+    clearTimeout(timeout);
   }
-  return globalThis.fetch(input, init);
 }
 
 // ---------------------------------------------------------------------------
@@ -50,41 +57,67 @@ export function PantheonAuthGate(props: ParentProps) {
 
   // Try to restore an existing session on mount
   onMount(async () => {
-    const existing = localStorage.getItem("pantheon.jwt");
-    if (existing) {
-      setAuthenticated(true);
-      setLoading(false);
-      return;
-    }
-
-    // Dev shortcut: auto-login when pointing at localhost
     const base = pantheonBaseUrl();
-    if (/localhost|127\.0\.0\.1/.test(base)) {
+    console.log("[pantheon-auth] mount, base =", base);
+
+    // Validate existing token against Pantheon before trusting it
+    const existing = localStorage.getItem("pantheon.jwt");
+    console.log("[pantheon-auth] existing jwt?", !!existing);
+    if (existing) {
       try {
-        const res = await authFetch(`${base}/backend/login/localhost`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
+        console.log("[pantheon-auth] validating token via /backend/me");
+        const res = await authFetch(`${base}/backend/me`, {
+          headers: { Authorization: `Bearer ${existing}` },
         });
+        console.log("[pantheon-auth] /backend/me status:", res.status);
         if (res.ok) {
-          const data = (await res.json()) as { token: string };
-          localStorage.setItem("pantheon.jwt", data.token);
-          localStorage.setItem("openwork.server.token", data.token);
           setAuthenticated(true);
           setLoading(false);
           return;
         }
-      } catch {
-        // Fall through to manual login
+      } catch (err) {
+        console.log("[pantheon-auth] validation failed:", err);
       }
+      localStorage.removeItem("pantheon.jwt");
+      localStorage.removeItem("openwork.server.token");
     }
 
+    console.log("[pantheon-auth] showing login screen");
     setLoading(false);
   });
 
   // ------------------------------------------------------------------
   // OIDC PKCE login flow
   // ------------------------------------------------------------------
+
+  const isLocalDev = () => /localhost|127\.0\.0\.1/.test(pantheonBaseUrl());
+
+  async function handleDevLogin() {
+    setError(null);
+    setLoading(true);
+    try {
+      const base = pantheonBaseUrl();
+      console.log("[pantheon-auth] dev login attempt");
+      const res = await authFetch(`${base}/backend/login/localhost`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!res.ok) throw new Error(`Dev login failed (${res.status})`);
+      const data = (await res.json()) as { token?: string; access_token?: string };
+      const token = data.token ?? data.access_token ?? "";
+      if (!token) throw new Error("No token in response");
+      localStorage.setItem("pantheon.jwt", token);
+      localStorage.setItem("openwork.server.token", token);
+      console.log("[pantheon-auth] dev login success");
+      setAuthenticated(true);
+    } catch (err: any) {
+      console.log("[pantheon-auth] dev login failed:", err);
+      setError(err?.message ?? "Dev login failed");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function handleLogin() {
     setError(null);
@@ -225,6 +258,14 @@ export function PantheonAuthGate(props: ParentProps) {
                 <p class="text-sm text-gray-400">Signing in…</p>
               }
             >
+              <Show when={isLocalDev()}>
+                <button
+                  onClick={handleDevLogin}
+                  class="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800 transition-colors mb-3"
+                >
+                  Dev Login (localhost)
+                </button>
+              </Show>
               <button
                 onClick={handleLogin}
                 class="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
