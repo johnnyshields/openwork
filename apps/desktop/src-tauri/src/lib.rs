@@ -59,11 +59,16 @@ use workspace::watch::WorkspaceWatchState;
 
 const NATIVE_DEEP_LINK_EVENT: &str = "openwork:deep-link-native";
 
-// BEGIN-PANTHEON-OVERRIDE — OIDC callback command: receives auth code from callback page and emits event to frontend
+// BEGIN-PANTHEON-OVERRIDE — OIDC callback command: receives auth code from callback page, emits event, closes login window
 #[tauri::command]
 fn auth_callback(app: AppHandle, code: String, state: String) -> Result<(), String> {
     app.emit("pantheon:auth-callback", serde_json::json!({ "code": code, "state": state }))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Close the login webview window by label
+    if let Some(win) = app.get_webview_window("pantheon-login") {
+        let _ = win.destroy();
+    }
+    Ok(())
 }
 // END-PANTHEON-OVERRIDE
 
