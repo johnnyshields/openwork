@@ -12,7 +12,11 @@ import { isPantheonMode, pantheonBaseUrl, isTauriRuntime } from "./utils";
 export default function AppEntry() {
   const defaultUrl = (() => {
     // BEGIN-PANTHEON-OVERRIDE — Pantheon mode takes priority over all other URL resolution
-    if (isPantheonMode()) return `${pantheonBaseUrl()}/opencode`;
+    if (isPantheonMode()) {
+      const url = `${pantheonBaseUrl()}/opencode`;
+      console.log("[pantheon] entry: Pantheon mode active, defaultUrl =", url);
+      return url;
+    }
     // END-PANTHEON-OVERRIDE
 
     // Desktop app connects to the local OpenCode engine.

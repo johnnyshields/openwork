@@ -17,5 +17,12 @@ const runPnpm = (args) => {
 runPnpm(["-C", "../..", "--filter", "@openwork/desktop", "run", "prepare:sidecar"]);
 // BEGIN-PANTHEON-OVERRIDE — pass build mode to select .env.development or .env.production
 const buildMode = process.env.BUILD_MODE || "production";
-runPnpm(["--filter", "@openwork/app", "build", "--", "--mode", buildMode]);
+const viteResult = spawnSync(
+  pnpmCmd,
+  [...pnpmArgs, "--filter", "@openwork/app", "exec", "vite", "build", "--mode", buildMode],
+  { stdio: "inherit", shell: process.platform === "win32" },
+);
+if (viteResult.status !== 0) {
+  process.exit(viteResult.status ?? 1);
+}
 // END-PANTHEON-OVERRIDE

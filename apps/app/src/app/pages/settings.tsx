@@ -44,6 +44,7 @@ import {
   FolderOpen,
   HardDrive,
   LifeBuoy,
+  LogOut,
   MessageCircle,
   PlugZap,
   RefreshCcw,
@@ -1897,11 +1898,36 @@ export default function SettingsView(props: SettingsViewProps) {
         </Match>
 
         <Match when={activeTab() === "den"}>
+          {/* BEGIN-PANTHEON-OVERRIDE — show Pantheon account panel with sign-out in Pantheon mode */}
+          <Show when={isPantheonMode()} fallback={
             <DenSettingsPanel
               developerMode={props.developerMode}
               connectRemoteWorkspace={props.connectRemoteWorkspace}
               openTeamBundle={props.openTeamBundle}
             />
+          }>
+            <div class={`${settingsPanelClass} space-y-4`}>
+              <div>
+                <div class="text-sm font-medium text-gray-12">Pantheon Account</div>
+                <div class="text-xs text-gray-9">
+                  Signed in via Pantheon.
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  console.log("[pantheon] signing out");
+                  window.localStorage.removeItem("pantheon.jwt");
+                  window.localStorage.removeItem("openwork.server.token");
+                  window.location.reload();
+                }}
+                class="inline-flex items-center gap-2 rounded-lg border border-red-6/60 bg-red-1/70 px-3 py-2 text-sm font-medium text-red-11 hover:bg-red-2 transition-colors"
+              >
+                <LogOut size={14} />
+                Sign out
+              </button>
+            </div>
+          </Show>
+          {/* END-PANTHEON-OVERRIDE */}
         </Match>
 
         <Match when={activeTab() === "advanced"}>

@@ -245,30 +245,30 @@ export function PantheonAuthGate(props: ParentProps) {
     <Show
       when={authenticated()}
       fallback={
-        <div class="flex items-center justify-center h-screen bg-[#f6f9fc]">
-          <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-sm w-full text-center">
-            <h1 class="text-xl font-semibold text-gray-900 mb-2">OpenWork</h1>
-            <p class="text-sm text-gray-500 mb-6">Sign in to continue</p>
+        <div class="flex items-center justify-center h-screen bg-gray-1">
+          <div class="bg-gray-2 rounded-2xl shadow-sm border border-gray-6 p-8 max-w-sm w-full text-center">
+            <h1 class="text-xl font-semibold text-gray-12 mb-2">OpenWork</h1>
+            <p class="text-sm text-gray-9 mb-6">Sign in to continue</p>
             <Show when={error()}>
-              <p class="text-sm text-red-600 mb-4">{error()}</p>
+              <p class="text-sm text-red-11 mb-4">{error()}</p>
             </Show>
             <Show
               when={!loading()}
               fallback={
-                <p class="text-sm text-gray-400">Signing in…</p>
+                <p class="text-sm text-gray-9">Signing in…</p>
               }
             >
               <Show when={isLocalDev()}>
                 <button
                   onClick={handleDevLogin}
-                  class="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800 transition-colors mb-3"
+                  class="w-full rounded-lg bg-gray-12 px-4 py-2.5 text-sm font-medium text-gray-1 hover:bg-gray-11 transition-colors mb-3"
                 >
                   Dev Login (localhost)
                 </button>
               </Show>
               <button
                 onClick={handleLogin}
-                class="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
+                class="w-full rounded-lg bg-gray-12 px-4 py-2.5 text-sm font-medium text-gray-1 hover:bg-gray-11 transition-colors"
               >
                 Sign in
               </button>
