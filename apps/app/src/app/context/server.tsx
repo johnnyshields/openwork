@@ -121,10 +121,26 @@ export function ServerProvider(props: ParentProps & { defaultUrl: string }) {
 
   const checkHealth = async (url: string) => {
     if (!url) return false;
-    const token = readOpenworkToken();
-    // BEGIN-PANTHEON-OVERRIDE — always attach Bearer token in Pantheon mode
-    const headers = token && (isPantheonMode() || url.includes("/opencode")) ? { Authorization: `Bearer ${token}` } : undefined;
+    // BEGIN-PANTHEON-OVERRIDE — in Pantheon mode, check the OpenWork API health endpoint
+    // instead of the OpenCode SDK /global/health (which is workspace-scoped in Pantheon)
+    if (isPantheonMode()) {
+      try {
+        const token = readOpenworkToken();
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const fetchImpl = isTauriRuntime() ? tauriFetch : globalThis.fetch;
+        const res = await fetchImpl(`${url.replace(/\/opencode\/?$/, "")}/health`, {
+          headers,
+          signal: AbortSignal.timeout(3000),
+        });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    }
     // END-PANTHEON-OVERRIDE
+    const token = readOpenworkToken();
+    const headers = token && url.includes("/opencode") ? { Authorization: `Bearer ${token}` } : undefined;
     const client = createOpencodeClient({
       baseUrl: url,
       headers,

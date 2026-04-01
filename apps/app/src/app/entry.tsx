@@ -12,8 +12,10 @@ import { isPantheonMode, pantheonBaseUrl, isTauriRuntime } from "./utils";
 export default function AppEntry() {
   const defaultUrl = (() => {
     // BEGIN-PANTHEON-OVERRIDE — Pantheon mode takes priority over all other URL resolution
+    // Use the OpenWork API base URL; workspace activation will build the
+    // workspace-scoped OpenCode URL (/openwork/api/w/{wid}/opencode).
     if (isPantheonMode()) {
-      const url = `${pantheonBaseUrl()}/opencode`;
+      const url = `${pantheonBaseUrl()}/openwork/api`;
       console.log("[pantheon] entry: Pantheon mode active, defaultUrl =", url);
       return url;
     }
