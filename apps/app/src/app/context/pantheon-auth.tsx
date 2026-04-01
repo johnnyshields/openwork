@@ -1,5 +1,5 @@
 // BEGIN-PANTHEON-OVERRIDE — OIDC login gate for Pantheon authentication
-import { createSignal, onMount, Show, type ParentProps } from "solid-js";
+import { createSignal, onCleanup, onMount, Show, type ParentProps } from "solid-js";
 import { pantheonBaseUrl, isTauriRuntime } from "../utils";
 
 // ---------------------------------------------------------------------------
@@ -55,6 +55,9 @@ export function PantheonAuthGate(props: ParentProps) {
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
 
+  let eventCleanup: (() => void) | undefined;
+  onCleanup(() => eventCleanup?.());
+
   // Try to restore an existing session on mount
   onMount(async () => {
     const base = pantheonBaseUrl();
@@ -87,37 +90,57 @@ export function PantheonAuthGate(props: ParentProps) {
   });
 
   // ------------------------------------------------------------------
-  // OIDC PKCE login flow
+  // Token exchange (shared by Tauri event and web popup flows)
   // ------------------------------------------------------------------
 
-  const isLocalDev = () => /localhost|127\.0\.0\.1/.test(pantheonBaseUrl());
+  async function exchangeCodeForToken(code: string, state: string) {
+    const base = pantheonBaseUrl();
+    const savedState = sessionStorage.getItem("pantheon.oidc.state");
+    if (state !== savedState) {
+      console.log("[pantheon-auth] state mismatch:", { received: state, expected: savedState });
+      setError("Authentication failed: state mismatch.");
+      setLoading(false);
+      return;
+    }
 
-  async function handleDevLogin() {
-    setError(null);
-    setLoading(true);
+    const savedVerifier = sessionStorage.getItem("pantheon.oidc.code_verifier")!;
+    const redirectUri = `${base}/oauth/callback`;
+
     try {
-      const base = pantheonBaseUrl();
-      console.log("[pantheon-auth] dev login attempt");
-      const res = await authFetch(`${base}/backend/login/localhost`, {
+      console.log("[pantheon-auth] exchanging code for token");
+      const tokenRes = await authFetch(`${base}/oauth/token`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+          client_id: "openwork",
+          code_verifier: savedVerifier,
+        }).toString(),
       });
-      if (!res.ok) throw new Error(`Dev login failed (${res.status})`);
-      const data = (await res.json()) as { token?: string; access_token?: string };
-      const token = data.token ?? data.access_token ?? "";
-      if (!token) throw new Error("No token in response");
-      localStorage.setItem("pantheon.jwt", token);
-      localStorage.setItem("openwork.server.token", token);
-      console.log("[pantheon-auth] dev login success");
+
+      if (!tokenRes.ok) {
+        const detail = await tokenRes.text().catch(() => "");
+        throw new Error(`Token exchange failed (${tokenRes.status}): ${detail}`);
+      }
+
+      const tokenData = (await tokenRes.json()) as { access_token: string };
+      localStorage.setItem("pantheon.jwt", tokenData.access_token);
+      localStorage.setItem("openwork.server.token", tokenData.access_token);
+      console.log("[pantheon-auth] login success");
       setAuthenticated(true);
     } catch (err: any) {
-      console.log("[pantheon-auth] dev login failed:", err);
-      setError(err?.message ?? "Dev login failed");
+      console.log("[pantheon-auth] token exchange failed:", err);
+      setError(err?.message ?? "Token exchange failed");
     } finally {
       setLoading(false);
     }
   }
+
+  // ------------------------------------------------------------------
+  // OIDC PKCE login flow
+  // ------------------------------------------------------------------
 
   async function handleLogin() {
     setError(null);
@@ -134,7 +157,7 @@ export function PantheonAuthGate(props: ParentProps) {
       sessionStorage.setItem("pantheon.oidc.nonce", nonce);
       sessionStorage.setItem("pantheon.oidc.code_verifier", codeVerifier);
 
-      const redirectUri = `${window.location.origin}/#/auth/callback`;
+      const redirectUri = `${base}/oauth/callback`;
 
       const authUrl =
         `${base}/oauth/authorize?` +
@@ -147,95 +170,80 @@ export function PantheonAuthGate(props: ParentProps) {
         `code_challenge=${codeChallenge}&` +
         `code_challenge_method=S256`;
 
-      const popup = window.open(authUrl, "pantheon-oidc", "width=500,height=650");
+      console.log("[pantheon-auth] starting OIDC flow, redirect_uri =", redirectUri);
 
-      // Listen for the callback message from the popup
-      const onMessage = async (event: MessageEvent) => {
-        if (event.origin !== window.location.origin) return;
-        if (event.data?.type !== "pantheon-oidc-callback") return;
+      if (isTauriRuntime()) {
+        // Listen for the auth callback event from the Tauri command
+        const { listen } = await import("@tauri-apps/api/event");
+        const unlisten = await listen<{ code: string; state: string }>(
+          "pantheon:auth-callback",
+          (event) => {
+            console.log("[pantheon-auth] received auth callback event");
+            unlisten();
+            void exchangeCodeForToken(event.payload.code, event.payload.state);
+          },
+        );
+        eventCleanup = unlisten;
 
-        window.removeEventListener("message", onMessage);
+        // Open a Tauri webview window for the login flow.
+        // The callback page at /oauth/callback will call invoke('auth_callback', { code, state })
+        // which emits the 'pantheon:auth-callback' event we're listening for above.
+        const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        console.log("[pantheon-auth] creating login webview window");
 
-        const { code, state: returnedState } = event.data as {
-          code: string;
-          state: string;
-        };
+        const loginWindow = new WebviewWindow("pantheon-login", {
+          url: authUrl,
+          title: "Sign in — OpenWork",
+          width: 500,
+          height: 700,
+          center: true,
+          resizable: true,
+        });
 
-        const savedState = sessionStorage.getItem("pantheon.oidc.state");
-        if (returnedState !== savedState) {
-          setError("Authentication failed: state mismatch.");
+        loginWindow.once("tauri://created", () => {
+          console.log("[pantheon-auth] login window created");
+        });
+
+        loginWindow.once("tauri://error", (e) => {
+          console.log("[pantheon-auth] login window creation failed:", e);
+          setError("Failed to open login window");
           setLoading(false);
-          return;
-        }
+        });
 
-        const savedVerifier = sessionStorage.getItem(
-          "pantheon.oidc.code_verifier",
-        )!;
-
-        try {
-          const tokenRes = await authFetch(`${base}/oauth/token`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
-            body: new URLSearchParams({
-              grant_type: "authorization_code",
-              code,
-              redirect_uri: redirectUri,
-              client_id: "openwork",
-              code_verifier: savedVerifier,
-            }).toString(),
-          });
-
-          if (!tokenRes.ok) {
-            throw new Error(`Token exchange failed (${tokenRes.status})`);
-          }
-
-          const tokenData = (await tokenRes.json()) as {
-            access_token: string;
-          };
-          localStorage.setItem("pantheon.jwt", tokenData.access_token);
-          localStorage.setItem(
-            "openwork.server.token",
-            tokenData.access_token,
-          );
-
-          setAuthenticated(true);
-        } catch (err: any) {
-          setError(err?.message ?? "Token exchange failed");
-        } finally {
-          setLoading(false);
-        }
-      };
-
-      window.addEventListener("message", onMessage);
-
-      // If the popup was blocked or closed, detect and clean up
-      const pollTimer = setInterval(() => {
-        if (popup && popup.closed) {
-          clearInterval(pollTimer);
-          window.removeEventListener("message", onMessage);
-
-          // Check localStorage fallback (popup may have written there)
-          if (localStorage.getItem("pantheon.oidc.complete") === "1") {
-            localStorage.removeItem("pantheon.oidc.complete");
-            const code = localStorage.getItem("pantheon.oidc.code") ?? "";
-            const fallbackState =
-              localStorage.getItem("pantheon.oidc.state") ?? "";
-            localStorage.removeItem("pantheon.oidc.code");
-            localStorage.removeItem("pantheon.oidc.state");
-            // Re-dispatch as message so the same handler fires
-            window.postMessage(
-              { type: "pantheon-oidc-callback", code, state: fallbackState },
-              window.location.origin,
-            );
-            window.addEventListener("message", onMessage);
-          } else if (!authenticated()) {
+        // If the window is closed without completing login, reset loading state
+        loginWindow.onCloseRequested(() => {
+          if (!authenticated()) {
+            console.log("[pantheon-auth] login window closed without completing");
             setLoading(false);
           }
-        }
-      }, 500);
+        });
+      } else {
+        // Web: popup flow with postMessage callback
+        const popup = window.open(authUrl, "pantheon-oidc", "width=500,height=700");
+
+        const onMessage = async (event: MessageEvent) => {
+          if (event.origin !== window.location.origin) return;
+          if (event.data?.type !== "pantheon-oidc-callback") return;
+          window.removeEventListener("message", onMessage);
+          const { code, state: returnedState } = event.data as { code: string; state: string };
+          await exchangeCodeForToken(code, returnedState);
+        };
+
+        window.addEventListener("message", onMessage);
+
+        // Detect popup closed without completing
+        const pollTimer = setInterval(() => {
+          if (popup && popup.closed) {
+            clearInterval(pollTimer);
+            window.removeEventListener("message", onMessage);
+            if (!authenticated()) {
+              setLoading(false);
+            }
+          }
+        }, 500);
+      }
     } catch (err: any) {
+      console.log("[pantheon-auth] login start failed:", err);
       setError(err?.message ?? "Failed to start login");
       setLoading(false);
     }
@@ -258,14 +266,6 @@ export function PantheonAuthGate(props: ParentProps) {
                 <p class="text-sm text-gray-9">Signing in…</p>
               }
             >
-              <Show when={isLocalDev()}>
-                <button
-                  onClick={handleDevLogin}
-                  class="w-full rounded-lg bg-gray-12 px-4 py-2.5 text-sm font-medium text-gray-1 hover:bg-gray-11 transition-colors mb-3"
-                >
-                  Dev Login (localhost)
-                </button>
-              </Show>
               <button
                 onClick={handleLogin}
                 class="w-full rounded-lg bg-gray-12 px-4 py-2.5 text-sm font-medium text-gray-1 hover:bg-gray-11 transition-colors"

@@ -59,6 +59,14 @@ use workspace::watch::WorkspaceWatchState;
 
 const NATIVE_DEEP_LINK_EVENT: &str = "openwork:deep-link-native";
 
+// BEGIN-PANTHEON-OVERRIDE — OIDC callback command: receives auth code from callback page and emits event to frontend
+#[tauri::command]
+fn auth_callback(app: AppHandle, code: String, state: String) -> Result<(), String> {
+    app.emit("pantheon:auth-callback", serde_json::json!({ "code": code, "state": state }))
+        .map_err(|e| e.to_string())
+}
+// END-PANTHEON-OVERRIDE
+
 #[cfg(target_os = "macos")]
 fn set_dev_app_name() {
     if std::env::var("OPENWORK_DEV_MODE").ok().as_deref() != Some("1") {
@@ -219,7 +227,10 @@ pub fn run() {
             opencode_mcp_auth,
             scheduler_list_jobs,
             scheduler_delete_job,
-            set_window_decorations
+            set_window_decorations,
+            // BEGIN-PANTHEON-OVERRIDE — register OIDC callback command
+            auth_callback
+            // END-PANTHEON-OVERRIDE
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenWork");
