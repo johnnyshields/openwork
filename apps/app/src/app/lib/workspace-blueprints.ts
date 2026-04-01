@@ -163,13 +163,6 @@ export function defaultBlueprintStartersForPreset(preset: string): WorkspaceBlue
           prompt: "Help me create or edit CSV files on this computer.",
         },
         {
-          id: "starter-connect-openai",
-          kind: "action",
-          title: "Connect ChatGPT",
-          description: "Add your OpenAi provider so ChatGPT models are ready in new sessions.",
-          action: "connect-openai",
-        },
-        {
           id: "browser-automation",
           kind: "session",
           title: "Automate Chrome",
