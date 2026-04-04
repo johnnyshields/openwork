@@ -88,10 +88,18 @@ fn await_router_startup(
             match event {
                 CommandEvent::Stdout(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes).to_string();
+                    // BEGIN-PANTHEON-OVERRIDE — forward sidecar output to log for debugging
+                    #[cfg(debug_assertions)]
+                    log::debug!("[opencode-router:stdout] {}", line.trim_end());
+                    // END-PANTHEON-OVERRIDE
                     append_output(startup_stdout, &line);
                 }
                 CommandEvent::Stderr(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes).to_string();
+                    // BEGIN-PANTHEON-OVERRIDE — forward sidecar output to log for debugging
+                    #[cfg(debug_assertions)]
+                    log::debug!("[opencode-router:stderr] {}", line.trim_end());
+                    // END-PANTHEON-OVERRIDE
                     append_output(startup_stderr, &line);
                 }
                 CommandEvent::Terminated(payload) => {
@@ -262,6 +270,10 @@ pub fn opencodeRouter_start(
                         match event {
                             CommandEvent::Stdout(line_bytes) => {
                                 let line = String::from_utf8_lossy(&line_bytes).to_string();
+                                // BEGIN-PANTHEON-OVERRIDE — forward sidecar output to console for debugging
+                                #[cfg(debug_assertions)]
+                                eprint!("[opencode-router:stdout] {}", line);
+                                // END-PANTHEON-OVERRIDE
                                 if let Ok(mut state) = state_handle.try_lock() {
                                     let next = state
                                         .last_stdout
@@ -274,6 +286,10 @@ pub fn opencodeRouter_start(
                             }
                             CommandEvent::Stderr(line_bytes) => {
                                 let line = String::from_utf8_lossy(&line_bytes).to_string();
+                                // BEGIN-PANTHEON-OVERRIDE — forward sidecar output to console for debugging
+                                #[cfg(debug_assertions)]
+                                eprint!("[opencode-router:stderr] {}", line);
+                                // END-PANTHEON-OVERRIDE
                                 if let Ok(mut state) = state_handle.try_lock() {
                                     let next = state
                                         .last_stderr

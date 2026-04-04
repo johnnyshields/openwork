@@ -460,6 +460,10 @@ pub fn engine_start(
                 match event {
                     CommandEvent::Stdout(line_bytes) => {
                         let line = String::from_utf8_lossy(&line_bytes).to_string();
+                        // BEGIN-PANTHEON-OVERRIDE — forward orchestrator stdout to log for debugging
+                        #[cfg(debug_assertions)]
+                        log::debug!("[orchestrator:stdout] {}", line.trim_end());
+                        // END-PANTHEON-OVERRIDE
                         if let Ok(mut state) = orchestrator_state_handle.try_lock() {
                             let next = state.last_stdout.as_deref().unwrap_or_default().to_string()
                                 + &line;
@@ -468,6 +472,10 @@ pub fn engine_start(
                     }
                     CommandEvent::Stderr(line_bytes) => {
                         let line = String::from_utf8_lossy(&line_bytes).to_string();
+                        // BEGIN-PANTHEON-OVERRIDE — forward orchestrator stderr to log for debugging
+                        #[cfg(debug_assertions)]
+                        log::debug!("[orchestrator:stderr] {}", line.trim_end());
+                        // END-PANTHEON-OVERRIDE
                         if let Ok(mut state) = orchestrator_state_handle.try_lock() {
                             let next = state.last_stderr.as_deref().unwrap_or_default().to_string()
                                 + &line;
@@ -615,6 +623,10 @@ pub fn engine_start(
             match event {
                 CommandEvent::Stdout(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes).to_string();
+                    // BEGIN-PANTHEON-OVERRIDE — forward sidecar stdout to log for debugging
+                    #[cfg(debug_assertions)]
+                    log::debug!("[opencode:stdout] {}", line.trim_end());
+                    // END-PANTHEON-OVERRIDE
                     if let Ok(mut output) = output_state_handle.lock() {
                         output.stdout.push_str(&line);
                     }
@@ -626,6 +638,10 @@ pub fn engine_start(
                 }
                 CommandEvent::Stderr(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes).to_string();
+                    // BEGIN-PANTHEON-OVERRIDE — forward sidecar stderr to log for debugging
+                    #[cfg(debug_assertions)]
+                    log::debug!("[opencode:stderr] {}", line.trim_end());
+                    // END-PANTHEON-OVERRIDE
                     if let Ok(mut output) = output_state_handle.lock() {
                         output.stderr.push_str(&line);
                     }

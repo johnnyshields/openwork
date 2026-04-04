@@ -210,6 +210,52 @@ pub fn request_orchestrator_shutdown(data_dir: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+// BEGIN-PANTHEON-OVERRIDE — auto-login to Pantheon and fetch user's secret key for OpenCode
+fn fetch_pantheon_secret_key(anthropic_base_url: &str) -> Result<String, String> {
+    // Derive Pantheon root URL by stripping the /ai/opencode/claude suffix
+    let pantheon_root = anthropic_base_url
+        .trim_end_matches('/')
+        .trim_end_matches("/ai/opencode/claude")
+        .trim_end_matches('/');
+
+    if pantheon_root.is_empty() {
+        return Err("Could not derive Pantheon root URL".into());
+    }
+
+    log::debug!("[pantheon] Auto-login to {}/backend/login/localhost (base_url={})", pantheon_root, anthropic_base_url);
+
+    // Step 1: Auto-login to get JWT
+    let login_url = format!("{}/backend/login/localhost", pantheon_root);
+    let login_resp: serde_json::Value = ureq::post(&login_url)
+        .call()
+        .map_err(|e| format!("Pantheon auto-login failed: {e}"))?
+        .into_json()
+        .map_err(|e| format!("Failed to parse login response: {e}"))?;
+
+    let jwt = login_resp["access_token"]
+        .as_str()
+        .ok_or("No access_token in login response")?
+        .to_string();
+
+    // Step 2: Use JWT to fetch user profile with secret_key
+    let me_url = format!("{}/backend/me", pantheon_root);
+    let me_resp: serde_json::Value = ureq::get(&me_url)
+        .set("Authorization", &format!("Bearer {jwt}"))
+        .call()
+        .map_err(|e| format!("Pantheon /backend/me failed: {e}"))?
+        .into_json()
+        .map_err(|e| format!("Failed to parse /backend/me response: {e}"))?;
+
+    let secret_key = me_resp["secret_key"]
+        .as_str()
+        .ok_or("No secret_key in user profile")?
+        .to_string();
+
+    log::debug!("[pantheon] Got secret key: {}...", &secret_key[..15.min(secret_key.len())]);
+    Ok(secret_key)
+}
+// END-PANTHEON-OVERRIDE
+
 pub fn spawn_orchestrator_daemon(
     app: &AppHandle,
     options: &OrchestratorSpawnOptions,
@@ -286,6 +332,28 @@ pub fn spawn_orchestrator_daemon(
     if options.opencode_enable_exa {
         command = command.env("OPENCODE_ENABLE_EXA", "1");
     }
+
+    // BEGIN-PANTHEON-OVERRIDE — route Anthropic API through Pantheon when configured
+    if let Ok(base_url) = std::env::var("ANTHROPIC_BASE_URL") {
+        let base_url = base_url.trim().to_string();
+        if !base_url.is_empty() {
+            command = command.env("ANTHROPIC_BASE_URL", &base_url);
+
+            // Auto-fetch the user's Pantheon secret key if no API key is provided.
+            // Derive Pantheon root from ANTHROPIC_BASE_URL (strip /ai/opencode/claude suffix).
+            let api_key = std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .filter(|k| !k.trim().is_empty());
+            let api_key = match api_key {
+                Some(k) => k,
+                None => fetch_pantheon_secret_key(&base_url).unwrap_or_default(),
+            };
+            if !api_key.is_empty() {
+                command = command.env("ANTHROPIC_API_KEY", &api_key);
+            }
+        }
+    }
+    // END-PANTHEON-OVERRIDE
 
     command
         .spawn()

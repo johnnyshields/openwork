@@ -391,6 +391,10 @@ pub fn start_openwork_server(
             match event {
                 CommandEvent::Stdout(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes).to_string();
+                    // BEGIN-PANTHEON-OVERRIDE — forward sidecar output to log for debugging
+                    #[cfg(debug_assertions)]
+                    log::debug!("[openwork-server:stdout] {}", line.trim_end());
+                    // END-PANTHEON-OVERRIDE
                     if let Ok(mut state) = state_handle.try_lock() {
                         let next =
                             state.last_stdout.as_deref().unwrap_or_default().to_string() + &line;
@@ -399,6 +403,10 @@ pub fn start_openwork_server(
                 }
                 CommandEvent::Stderr(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes).to_string();
+                    // BEGIN-PANTHEON-OVERRIDE — forward sidecar output to log for debugging
+                    #[cfg(debug_assertions)]
+                    log::debug!("[openwork-server:stderr] {}", line.trim_end());
+                    // END-PANTHEON-OVERRIDE
                     if let Ok(mut state) = state_handle.try_lock() {
                         let next =
                             state.last_stderr.as_deref().unwrap_or_default().to_string() + &line;

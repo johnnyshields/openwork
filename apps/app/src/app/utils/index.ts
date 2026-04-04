@@ -84,6 +84,35 @@ export function isPantheonMode() {
 export function pantheonBaseUrl() {
   return (import.meta.env.VITE_PANTHEON_BASE_URL as string).trim().replace(/\/+$/, "");
 }
+
+/**
+ * Fetch the curated provider list from Pantheon.
+ * Returns the provider list response, or null if the fetch fails.
+ */
+export async function fetchPantheonProviderList(): Promise<any | null> {
+  if (!isPantheonMode()) return null;
+  try {
+    const base = pantheonBaseUrl();
+    const token = (typeof window !== "undefined"
+      ? window.localStorage.getItem("pantheon.jwt")
+      : null) ?? "";
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+    let fetchFn: typeof globalThis.fetch = globalThis.fetch;
+    try {
+      if (typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__) {
+        const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+        fetchFn = tauriFetch;
+      }
+    } catch { /* use globalThis.fetch */ }
+    const resp = await fetchFn(`${base}/openwork/api/w/_/opencode/provider`, { headers });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
 // END-PANTHEON-OVERRIDE
 
 export function isWindowsPlatform() {

@@ -70,6 +70,9 @@ import { waitForHealthy, createClient, type OpencodeAuth } from "../lib/opencode
 import type { OpencodeConnectStatus, ProviderListItem } from "../types";
 import { t, currentLocale } from "../../i18n";
 import { filterProviderList, mapConfigProvidersToList } from "../utils/providers";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon provider list fetch
+import { fetchPantheonProviderList } from "../utils";
+// END-PANTHEON-OVERRIDE
 import { buildDefaultWorkspaceBlueprint, normalizeWorkspaceOpenworkConfig } from "../lib/workspace-blueprints";
 import type { OpenworkServerStore } from "../connections/openwork-server-store";
 
@@ -1971,7 +1974,9 @@ export function createWorkspaceStore(options: {
             // ignore config read failures and continue with provider discovery
           }
           try {
-            const providerList = unwrap(await nextClient.provider.list());
+            // BEGIN-PANTHEON-OVERRIDE — use Pantheon curated provider list when available
+            const providerList = (await fetchPantheonProviderList()) ?? unwrap(await nextClient.provider.list());
+            // END-PANTHEON-OVERRIDE
               wsDebug("connect:providers:done", {
                 ms: Date.now() - providersAt,
                 source: "provider.list",

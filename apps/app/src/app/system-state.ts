@@ -14,7 +14,9 @@ import type {
   ResetOpenworkMode,
   UpdateHandle,
 } from "./types";
-import { addOpencodeCacheHint, isTauriRuntime, safeStringify } from "./utils";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon provider list fetch
+import { addOpencodeCacheHint, fetchPantheonProviderList, isTauriRuntime, safeStringify } from "./utils";
+// END-PANTHEON-OVERRIDE
 import { filterProviderList, mapConfigProvidersToList } from "./utils/providers";
 import { createUpdaterState, type UpdateStatus } from "./context/updater";
 import {
@@ -334,7 +336,9 @@ export function createSystemState(options: {
 
       try {
         const providerList = filterProviderList(
-          unwrap(await nextClient.provider.list()),
+          // BEGIN-PANTHEON-OVERRIDE — use Pantheon curated provider list when available
+          (await fetchPantheonProviderList()) ?? unwrap(await nextClient.provider.list()),
+          // END-PANTHEON-OVERRIDE
           disabledProviders,
         );
         options.setProviders(providerList.all);

@@ -18,7 +18,9 @@ import type {
 
 import type { McpStatusMap, TodoItem } from "../types";
 import { unwrap } from "../lib/opencode";
-import { safeStringify } from "../utils";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon provider list fetch
+import { fetchPantheonProviderList, safeStringify } from "../utils";
+// END-PANTHEON-OVERRIDE
 import { filterProviderList, mapConfigProvidersToList } from "../utils/providers";
 import { useGlobalSDK } from "./global-sdk";
 
@@ -124,7 +126,9 @@ export function GlobalSyncProvider(props: ParentProps) {
     }
     try {
       const result = filterProviderList(
-        unwrap(await globalSDK.client().provider.list()),
+        // BEGIN-PANTHEON-OVERRIDE — use Pantheon curated provider list when available
+        (await fetchPantheonProviderList()) ?? unwrap(await globalSDK.client().provider.list()),
+        // END-PANTHEON-OVERRIDE
         disabledProviders,
       );
       setGlobalStore("provider", result);

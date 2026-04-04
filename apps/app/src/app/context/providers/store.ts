@@ -4,6 +4,9 @@ import type { ProviderAuthAuthorization, ProviderListResponse } from "@opencode-
 
 import { unwrap, waitForHealthy } from "../../lib/opencode";
 import type { Client, ProviderListItem, WorkspaceDisplay } from "../../types";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon provider list fetch
+import { fetchPantheonProviderList } from "../../utils";
+// END-PANTHEON-OVERRIDE
 import { safeStringify } from "../../utils";
 import { filterProviderList, mapConfigProvidersToList } from "../../utils/providers";
 
@@ -279,8 +282,11 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
       // ignore config read failures and continue with current store state
     }
     try {
+      // BEGIN-PANTHEON-OVERRIDE — fetch curated provider list from Pantheon instead of local engine
+      const providerListResult = (await fetchPantheonProviderList()) ?? unwrap(await activeClient.provider.list());
+      // END-PANTHEON-OVERRIDE
       const updated = filterProviderList(
-        unwrap(await activeClient.provider.list()),
+        providerListResult,
         disabledProviders,
       );
       applyProviderListState(updated);
