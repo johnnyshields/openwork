@@ -1,6 +1,6 @@
 [![Discord](https://img.shields.io/badge/discord-加入-5865F2?logo=discord&logoColor=white)](https://discord.gg/VEhNQXxYMB)
 
-[English](./README.md) | [简体中文](./README_ZH.md) | 繁體中文
+[English](./README.md) | [简体中文](./README_ZH.md) | 繁體中文 | [日本語](./README_JA.md)
 
 # OpenWork
 > 讓您的公司提升 1000 倍的生產力。
@@ -67,7 +67,6 @@ OpenWork 的設計目標是：
 - **模板**：保存並重新運行常見工作流程（本地存儲）
 - **技能管理器**：
   - 列出已安裝的 `.opencode/skills` 資料夾
-  - 從 OpenPackage 安裝（`opkg install ...`）
   - 將本地技能資料夾導入到 `.opencode/skills/<skill-name>`
  
 
@@ -137,14 +136,6 @@ curl -fsSL https://opencode.ai/install | bash -s -- --version "$(node -e "const 
 資料夾選擇器使用 Tauri 對話框插件。
 功能權限在以下檔案中定義：
 - `packages/desktop/src-tauri/capabilities/default.json`
-
-## OpenPackage 說明
-
-如果 `opkg` 未全局安裝，OpenWork 會回退到：
-
-```bash
-pnpm dlx opkg install <package>
-```
 
 ## OpenCode 插件
 

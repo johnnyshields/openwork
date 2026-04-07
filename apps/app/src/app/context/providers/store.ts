@@ -1,21 +1,33 @@
-import { createMemo, createSignal, type Accessor } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 
-import type { ProviderAuthAuthorization, ProviderListResponse } from "@opencode-ai/sdk/v2/client";
+import type { ProviderAuthAuthorization, ProviderConfig, ProviderListResponse } from "@opencode-ai/sdk/v2/client";
 
+import { t } from "../../../i18n";
+import { createDenClient, readDenSettings, type DenOrgLlmProvider, type DenOrgLlmProviderConnection } from "../../lib/den";
 import { unwrap, waitForHealthy } from "../../lib/opencode";
 import type { Client, ProviderListItem, WorkspaceDisplay } from "../../types";
 // BEGIN-PANTHEON-OVERRIDE — import Pantheon provider list fetch
 import { fetchPantheonProviderList } from "../../utils";
 // END-PANTHEON-OVERRIDE
 import { safeStringify } from "../../utils";
-import { filterProviderList, mapConfigProvidersToList } from "../../utils/providers";
+import { compareProviders, filterProviderList, mapConfigProvidersToList } from "../../utils/providers";
 
 type ProviderReturnFocusTarget = "none" | "composer";
 
 export type ProviderAuthMethod = {
-  type: "oauth" | "api";
+  type: "oauth" | "api" | "cloud";
   label: string;
   methodIndex?: number;
+  cloudProviderId?: string;
+  description?: string;
+  env?: string[];
+  modelCount?: number;
+};
+
+export type ProviderAuthProvider = {
+  id: string;
+  name: string;
+  env: string[];
 };
 
 export type ProviderOAuthStartResult = {
@@ -46,10 +58,182 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
   const [providerAuthPreferredProviderId, setProviderAuthPreferredProviderId] = createSignal<string | null>(null);
   const [providerAuthReturnFocusTarget, setProviderAuthReturnFocusTarget] =
     createSignal<ProviderReturnFocusTarget>("none");
+  const [cloudOrgProviders, setCloudOrgProviders] = createSignal<DenOrgLlmProvider[]>([]);
+
+  let cloudOrgProvidersLoadKey = "";
+
+  const getStringList = (value: unknown) =>
+    Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      : [];
+
+  const getCloudProviderEnv = (config: Record<string, unknown>) => getStringList(config.env);
+
+  const buildCloudProviderMethod = (provider: DenOrgLlmProvider): ProviderAuthMethod => ({
+    type: "cloud",
+    label:
+      provider.name.trim().toLowerCase() === provider.providerId.trim().toLowerCase()
+        ? "Use organization provider"
+        : `Use ${provider.name}`,
+    cloudProviderId: provider.id,
+    description:
+      provider.models.length > 0
+        ? `${provider.models.length} curated model${provider.models.length === 1 ? "" : "s"} managed by your organization.`
+        : "Use the provider and credential managed by your organization.",
+    env: getCloudProviderEnv(provider.providerConfig),
+    modelCount: provider.models.length,
+  });
+
+  const buildCloudProviderConfig = (
+    provider: DenOrgLlmProviderConnection,
+  ): ProviderConfig => {
+    const models = Object.fromEntries(
+      provider.models.map((model) => {
+        const next: NonNullable<ProviderConfig["models"]>[string] = {
+          id: model.id,
+          name: model.name,
+        };
+        const raw = model.config;
+        for (const key of [
+          "family",
+          "release_date",
+          "attachment",
+          "reasoning",
+          "temperature",
+          "tool_call",
+          "interleaved",
+          "cost",
+          "limit",
+          "modalities",
+          "status",
+          "options",
+          "headers",
+          "provider",
+          "variants",
+        ] as const) {
+          const value = raw[key];
+          if (value !== undefined) {
+            (next as Record<string, unknown>)[key] = value;
+          }
+        }
+        return [model.id, next];
+      }),
+    );
+
+    const next: ProviderConfig = {
+      id: provider.providerId,
+      name: provider.name,
+      env: getCloudProviderEnv(provider.providerConfig),
+      models,
+    };
+
+    if (typeof provider.providerConfig.npm === "string" && provider.providerConfig.npm.trim()) {
+      next.npm = provider.providerConfig.npm;
+    }
+    if (typeof provider.providerConfig.api === "string" && provider.providerConfig.api.trim()) {
+      next.api = provider.providerConfig.api;
+    }
+    if (provider.providerConfig.options && typeof provider.providerConfig.options === "object") {
+      next.options = provider.providerConfig.options as Record<string, unknown>;
+    }
+    if (Array.isArray(provider.providerConfig.whitelist)) {
+      next.whitelist = getStringList(provider.providerConfig.whitelist);
+    }
+    if (Array.isArray(provider.providerConfig.blacklist)) {
+      next.blacklist = getStringList(provider.providerConfig.blacklist);
+    }
+
+    return next;
+  };
 
   const providerAuthWorkerType = createMemo<"local" | "remote">(() =>
     options.selectedWorkspaceDisplay().workspaceType === "remote" ? "remote" : "local",
   );
+
+  const providerAuthProviders = createMemo<ProviderAuthProvider[]>(() => {
+    const merged = new Map<string, ProviderAuthProvider>();
+
+    for (const provider of options.providers()) {
+      const id = provider.id?.trim();
+      if (!id) continue;
+      merged.set(id, {
+        id,
+        name: provider.name?.trim() || id,
+        env: Array.isArray(provider.env) ? provider.env : [],
+      });
+    }
+
+    for (const provider of cloudOrgProviders()) {
+      const id = provider.providerId.trim();
+      if (!id || merged.has(id)) continue;
+      merged.set(id, {
+        id,
+        name: provider.name.trim() || id,
+        env: getCloudProviderEnv(provider.providerConfig),
+      });
+    }
+
+    return [...merged.values()].sort(compareProviders);
+  });
+
+  const getCloudOrgProvidersKey = () => {
+    const settings = readDenSettings();
+    return [
+      settings.baseUrl,
+      settings.apiBaseUrl ?? "",
+      settings.activeOrgId?.trim() ?? "",
+      settings.authToken?.trim() ?? "",
+    ].join("::");
+  };
+
+  const refreshCloudOrgProviders = async (optionsArg?: { force?: boolean }) => {
+    const settings = readDenSettings();
+    const loadKey = getCloudOrgProvidersKey();
+    const token = settings.authToken?.trim() ?? "";
+    const orgId = settings.activeOrgId?.trim() ?? "";
+
+    if (!optionsArg?.force && cloudOrgProvidersLoadKey === loadKey) {
+      return cloudOrgProviders();
+    }
+
+    if (!token || !orgId) {
+      setCloudOrgProviders([]);
+      cloudOrgProvidersLoadKey = loadKey;
+      return [];
+    }
+
+    const client = createDenClient({
+      baseUrl: settings.baseUrl,
+      token,
+    });
+    try {
+      const providers = await client.listOrgLlmProviders(orgId);
+      setCloudOrgProviders(providers);
+      cloudOrgProvidersLoadKey = loadKey;
+      return providers;
+    } catch (error) {
+      setCloudOrgProviders([]);
+      cloudOrgProvidersLoadKey = "";
+      throw error;
+    }
+  };
+
+  createEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleDenSessionUpdate = () => {
+      cloudOrgProvidersLoadKey = "";
+      setCloudOrgProviders([]);
+      setProviderAuthMethods({});
+    };
+
+    window.addEventListener("openwork-den-session-updated", handleDenSessionUpdate as EventListener);
+    onCleanup(() => {
+      window.removeEventListener("openwork-den-session-updated", handleDenSessionUpdate as EventListener);
+    });
+  });
 
   const applyProviderListState = (value: ProviderListResponse) => {
     options.setProviders(value.all ?? []);
@@ -72,7 +256,7 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
   const assertNoClientError = (result: unknown) => {
     const maybe = result as { error?: unknown } | null | undefined;
     if (!maybe || maybe.error === undefined) return;
-    throw new Error(describeProviderError(maybe.error, "Request failed"));
+    throw new Error(describeProviderError(maybe.error, t("providers.request_failed")));
   };
 
   const describeProviderError = (error: unknown, fallback: string) => {
@@ -127,9 +311,9 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
 
     const generic = raw && /^unknown\s+error$/i.test(raw);
     const heading = (() => {
-      if (status === 401 || status === 403) return "Authentication failed";
-      if (status === 429) return "Rate limit exceeded";
-      if (provider) return `Provider error (${provider})`;
+      if (status === 401 || status === 403) return t("providers.auth_failed");
+      if (status === 429) return t("providers.rate_limit_exceeded");
+      if (provider) return t("providers.provider_error", undefined, { provider });
       return fallback;
     })();
 
@@ -151,8 +335,9 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
 
   const buildProviderAuthMethods = (
     methods: Record<string, ProviderAuthMethod[]>,
-    availableProviders: ProviderListItem[],
+    availableProviders: ProviderAuthProvider[],
     workerType: "local" | "remote",
+    cloudProviders: DenOrgLlmProvider[],
   ) => {
     const merged = Object.fromEntries(
       Object.entries(methods ?? {}).map(([id, providerMethods]) => [
@@ -169,7 +354,7 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
       if (!Array.isArray(provider.env) || provider.env.length === 0) continue;
       const existing = merged[id] ?? [];
       if (existing.some((method) => method.type === "api")) continue;
-      merged[id] = [...existing, { type: "api", label: "API key" }];
+      merged[id] = [...existing, { type: "api", label: t("providers.api_key_label") }];
     }
     for (const [id, providerMethods] of Object.entries(merged)) {
       const provider = availableProviders.find((item) => item.id === id);
@@ -184,19 +369,34 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
         return workerType === "remote" ? isHeadless : !isHeadless;
       });
     }
+
+    for (const provider of cloudProviders) {
+      const id = provider.providerId.trim();
+      if (!id) continue;
+      const existing = merged[id] ?? [];
+      if (existing.some((method) => method.type === "cloud" && method.cloudProviderId === provider.id)) {
+        continue;
+      }
+      merged[id] = [...existing, buildCloudProviderMethod(provider)];
+    }
+
     return merged;
   };
 
   const loadProviderAuthMethods = async (workerType: "local" | "remote") => {
     const c = options.client();
     if (!c) {
-      throw new Error("Not connected to a server");
+      throw new Error(t("providers.not_connected"));
     }
     const methods = unwrap(await c.provider.auth());
+    const cloudProviders = await refreshCloudOrgProviders().catch(
+      () => [] as DenOrgLlmProvider[],
+    );
     return buildProviderAuthMethods(
       methods as Record<string, ProviderAuthMethod[]>,
-      options.providers(),
+      providerAuthProviders(),
       workerType,
+      cloudProviders,
     );
   };
 
@@ -207,7 +407,7 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
     setProviderAuthError(null);
     const c = options.client();
     if (!c) {
-      throw new Error("Not connected to a server");
+      throw new Error(t("providers.not_connected"));
     }
     try {
       const cachedMethods = providerAuthMethods();
@@ -216,17 +416,17 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
         : await loadProviderAuthMethods(providerAuthWorkerType());
       const providerIds = Object.keys(authMethods).sort();
       if (!providerIds.length) {
-        throw new Error("No providers available");
+        throw new Error(t("providers.no_providers_available"));
       }
 
       const resolved = providerId?.trim() ?? "";
       if (!resolved) {
-        throw new Error("Provider ID is required");
+        throw new Error(t("providers.provider_id_required"));
       }
 
       const methods = authMethods[resolved];
       if (!methods || !methods.length) {
-        throw new Error(`Unknown provider: ${resolved}`);
+        throw new Error(`${t("providers.unknown_provider")}: ${resolved}`);
       }
 
       const oauthIndex =
@@ -234,12 +434,12 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
           ? methodIndex
           : methods.find((method) => method.type === "oauth")?.methodIndex ?? -1;
       if (oauthIndex === -1) {
-        throw new Error(`No OAuth flow available for ${resolved}. Use an API key instead.`);
+        throw new Error(`${t("providers.no_oauth_prefix")} ${resolved}. ${t("providers.use_api_key_suffix")}`);
       }
 
       const selectedMethod = methods.find((method) => method.methodIndex === oauthIndex);
       if (!selectedMethod || selectedMethod.type !== "oauth") {
-        throw new Error(`Selected auth method is not an OAuth flow for ${resolved}.`);
+        throw new Error(`${t("providers.not_oauth_flow_prefix")} ${resolved}.`);
       }
 
       const auth = unwrap(await c.provider.oauth.authorize({ providerID: resolved, method: oauthIndex }));
@@ -248,7 +448,7 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
         authorization: auth,
       };
     } catch (error) {
-      const message = describeProviderError(error, "Failed to connect provider");
+      const message = describeProviderError(error, t("providers.connect_failed"));
       setProviderAuthError(message);
       throw error instanceof Error ? error : new Error(message);
     }
@@ -315,16 +515,16 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
     setProviderAuthError(null);
     const c = options.client();
     if (!c) {
-      throw new Error("Not connected to a server");
+      throw new Error(t("providers.not_connected"));
     }
 
     const resolved = providerId?.trim();
     if (!resolved) {
-      throw new Error("Provider ID is required");
+      throw new Error(t("providers.provider_id_required"));
     }
 
     if (!Number.isInteger(methodIndex) || methodIndex < 0) {
-      throw new Error("OAuth method is required");
+      throw new Error(t("providers.oauth_method_required"));
     }
 
     const waitForProviderConnection = async (timeoutMs = 15_000, pollMs = 2_000) => {
@@ -359,26 +559,26 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
       const updated = await refreshProviders({ dispose: true });
       const connectedNow = Array.isArray(updated?.connected) && updated.connected.includes(resolved);
       if (connectedNow) {
-        return { connected: true, message: `Connected ${resolved}` };
+        return { connected: true, message: `${t("status.connected")} ${resolved}` };
       }
       const connected = await waitForProviderConnection();
       if (connected) {
-        return { connected: true, message: `Connected ${resolved}` };
+        return { connected: true, message: `${t("status.connected")} ${resolved}` };
       }
       return { connected: false, pending: true };
     } catch (error) {
       if (isPendingOauthError(error)) {
         const updated = await refreshProviders({ dispose: true });
         if (Array.isArray(updated?.connected) && updated.connected.includes(resolved)) {
-          return { connected: true, message: `Connected ${resolved}` };
+          return { connected: true, message: `${t("status.connected")} ${resolved}` };
         }
         const connected = await waitForProviderConnection();
         if (connected) {
-          return { connected: true, message: `Connected ${resolved}` };
+          return { connected: true, message: `${t("status.connected")} ${resolved}` };
         }
         return { connected: false, pending: true };
       }
-      const message = describeProviderError(error, "Failed to complete OAuth");
+      const message = describeProviderError(error, t("providers.oauth_failed"));
       setProviderAuthError(message);
       throw error instanceof Error ? error : new Error(message);
     }
@@ -388,12 +588,12 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
     setProviderAuthError(null);
     const c = options.client();
     if (!c) {
-      throw new Error("Not connected to a server");
+      throw new Error(t("providers.not_connected"));
     }
 
     const trimmed = apiKey.trim();
     if (!trimmed) {
-      throw new Error("API key is required");
+      throw new Error(t("providers.api_key_required"));
     }
 
     try {
@@ -402,9 +602,72 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
         auth: { type: "api", key: trimmed },
       });
       await refreshProviders({ dispose: true });
-      return `Connected ${providerId}`;
+      return `${t("status.connected")} ${providerId}`;
     } catch (error) {
-      const message = describeProviderError(error, "Failed to save API key");
+      const message = describeProviderError(error, t("providers.save_api_key_failed"));
+      setProviderAuthError(message);
+      throw error instanceof Error ? error : new Error(message);
+    }
+  }
+
+  async function connectCloudProvider(cloudProviderId: string) {
+    setProviderAuthError(null);
+    const c = options.client();
+    if (!c) {
+      throw new Error(t("providers.not_connected"));
+    }
+
+    const settings = readDenSettings();
+    const token = settings.authToken?.trim() ?? "";
+    const orgId = settings.activeOrgId?.trim() ?? "";
+    if (!token || !orgId) {
+      throw new Error("Sign in to OpenWork Cloud and choose an organization first.");
+    }
+
+    try {
+      const den = createDenClient({
+        baseUrl: settings.baseUrl,
+        token,
+      });
+      const provider = await den.getOrgLlmProviderConnection(orgId, cloudProviderId);
+      const apiKey = provider.apiKey?.trim() ?? "";
+      const env = getCloudProviderEnv(provider.providerConfig);
+      if (!apiKey && env.length > 0) {
+        throw new Error(`${provider.name} does not have a stored organization credential yet.`);
+      }
+
+      if (apiKey) {
+        await c.auth.set({
+          providerID: provider.providerId,
+          auth: {
+            type: "api",
+            key: apiKey,
+          },
+        });
+      }
+
+      const config = unwrap(await c.config.get());
+      const disabledProviders = Array.isArray(config.disabled_providers)
+        ? config.disabled_providers
+        : [];
+      const nextDisabledProviders = disabledProviders.filter((id) => id !== provider.providerId);
+
+      await c.config.update({
+        config: {
+          ...config,
+          disabled_providers: nextDisabledProviders,
+          provider: {
+            ...(config.provider ?? {}),
+            [provider.providerId]: buildCloudProviderConfig(provider),
+          },
+        },
+      });
+
+      options.setDisabledProviders(nextDisabledProviders);
+      await refreshProviders({ dispose: true });
+      return `${t("status.connected")} ${provider.name}`;
+    } catch (error) {
+      const message = describeProviderError(error, "Failed to connect organization provider.");
       setProviderAuthError(message);
       throw error instanceof Error ? error : new Error(message);
     }
@@ -414,12 +677,12 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
     setProviderAuthError(null);
     const c = options.client();
     if (!c) {
-      throw new Error("Not connected to a server");
+      throw new Error(t("providers.not_connected"));
     }
 
     const resolved = providerId.trim();
     if (!resolved) {
-      throw new Error("Provider ID is required");
+      throw new Error(t("providers.provider_id_required"));
     }
 
     const provider = options.providers().find((entry) => entry.id === resolved) as
@@ -452,7 +715,7 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
         return;
       }
 
-      throw new Error("Provider auth removal is not supported by this client.");
+      throw new Error(t("providers.removal_unsupported"));
     };
 
     const disableProvider = async () => {
@@ -497,18 +760,18 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
         }
         if (!Array.isArray(updated?.connected) || !updated.connected.includes(resolved)) {
           return disabled
-            ? `Disconnected ${resolved} and disabled it in OpenCode config.`
-            : `Disconnected ${resolved}.`;
+            ? `${t("providers.disconnected_prefix")} ${resolved} ${t("providers.disabled_in_config_suffix")}`
+            : `${t("providers.disconnected_prefix")} ${resolved}.`;
         }
       }
 
       if (Array.isArray(updated?.connected) && updated.connected.includes(resolved)) {
-        return `Removed stored credentials for ${resolved}, but the worker still reports it as connected. Clear any remaining API key or OAuth credentials and restart the worker to fully disconnect.`;
+        return `Removed stored credentials for ${resolved}${t("providers.still_connected_suffix")}`;
       }
       removeProviderFromState(resolved);
-      return `Disconnected ${resolved}`;
+      return `${t("providers.disconnected_prefix")} ${resolved}`;
     } catch (error) {
-      const message = describeProviderError(error, "Failed to disconnect provider");
+      const message = describeProviderError(error, t("providers.disconnect_failed"));
       setProviderAuthError(message);
       throw error instanceof Error ? error : new Error(message);
     }
@@ -529,7 +792,7 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
     } catch (error) {
       setProviderAuthPreferredProviderId(null);
       setProviderAuthReturnFocusTarget("none");
-      const message = describeProviderError(error, "Failed to load providers");
+      const message = describeProviderError(error, t("providers.load_failed"));
       setProviderAuthError(message);
       throw error;
     } finally {
@@ -557,10 +820,12 @@ export function createProvidersStore(options: CreateProvidersStoreOptions) {
     providerAuthMethods,
     providerAuthPreferredProviderId,
     providerAuthWorkerType,
+    providerAuthProviders,
     startProviderAuth,
     refreshProviders,
     completeProviderAuthOAuth,
     submitProviderApiKey,
+    connectCloudProvider,
     disconnectProvider,
     openProviderAuthModal,
     closeProviderAuthModal,

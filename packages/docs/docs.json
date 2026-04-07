@@ -8,9 +8,9 @@
     "dark": "/logo/dark.svg"
   },
   "colors": {
-    "primary": "#0F766E",
-    "light": "#14B8A6",
-    "dark": "#0F766E"
+    "primary": "#011627",
+    "light": "#3b82f6",
+    "dark": "#011627"
   },
   "navigation": {
     "tabs": [
@@ -18,6 +18,13 @@
         "tab": "Start here",
         "pages": [
           "get-started",
+          {
+            "group": "Cloud",
+            "pages": [
+              "introduction",
+              "team-provisioning"
+            ]
+          },
           {
             "group": "Desktop App",
             "pages": [
@@ -27,7 +34,6 @@
               "computer-use",
               "sharing-ow-setup",
               "accessing-ow-from-slack",
-              "how-to-automate-your",
               "automating-tasks"
             ]
           },
@@ -39,12 +45,22 @@
             ]
           },
           {
+            "group": "Changelog",
+            "pages": [
+              "changelog"
+            ]
+          },
+          {
             "group": "Improve this doc",
             "pages": [
               "missing-docs"
             ]
           }
         ]
+      },
+      {
+        "tab": "API Reference",
+        "openapi": "https://api.openworklabs.com/openapi.json"
       }
     ]
   },

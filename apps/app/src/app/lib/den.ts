@@ -1,6 +1,7 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { isDesktopDeployment } from "./openwork-deployment";
 import { isTauriRuntime } from "../utils";
+import type { DenOrgSkillCard } from "../types";
 
 const STORAGE_BASE_URL = "openwork.den.baseUrl";
 const STORAGE_API_BASE_URL = "openwork.den.apiBaseUrl";
@@ -78,6 +79,29 @@ export type DenTemplate = {
   createdAt: string | null;
   updatedAt: string | null;
   creator: DenTemplateCreator | null;
+};
+
+export type DenOrgLlmProviderModel = {
+  id: string;
+  name: string;
+  config: Record<string, unknown>;
+  createdAt: string | null;
+};
+
+export type DenOrgLlmProvider = {
+  id: string;
+  source: "models_dev" | "custom";
+  providerId: string;
+  name: string;
+  providerConfig: Record<string, unknown>;
+  hasApiKey: boolean;
+  models: DenOrgLlmProviderModel[];
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type DenOrgLlmProviderConnection = DenOrgLlmProvider & {
+  apiKey: string | null;
 };
 
 export type DenBillingPrice = {
@@ -503,6 +527,121 @@ function getTemplates(payload: unknown): DenTemplate[] {
     .filter((entry): entry is DenTemplate => entry !== null);
 }
 
+
+function parseDenOrgSkillRow(record: Record<string, unknown>, hubName: string | null): DenOrgSkillCard | null {
+  if (typeof record.id !== "string" || typeof record.title !== "string" || typeof record.skillText !== "string") {
+    return null;
+  }
+  const description = typeof record.description === "string" ? record.description : null;
+  const shared = record.shared === "org" || record.shared === "public" ? record.shared : null;
+  return {
+    id: record.id,
+    title: record.title,
+    description,
+    skillText: record.skillText,
+    hubName,
+    shared,
+  };
+}
+
+function getDenOrgSkillsFromPayload(payload: unknown): DenOrgSkillCard[] {
+  if (!isRecord(payload) || !Array.isArray(payload.skills)) {
+    return [];
+  }
+  return payload.skills
+    .map((entry) => (isRecord(entry) ? parseDenOrgSkillRow(entry, null) : null))
+    .filter((entry): entry is DenOrgSkillCard => entry !== null);
+}
+
+type DenOrgSkillHubParsed = { id: string; name: string; skills: DenOrgSkillCard[] };
+
+function parseOrgSkillHubEntry(hub: Record<string, unknown>): DenOrgSkillHubParsed | null {
+  const hubId = hub.id;
+  const hubName = hub.name;
+  const hubSkills = hub.skills;
+  if (typeof hubId !== "string" || typeof hubName !== "string" || !Array.isArray(hubSkills)) {
+    return null;
+  }
+  const skills = hubSkills
+    .map((s) => (isRecord(s) ? parseDenOrgSkillRow(s, hubName) : null))
+    .filter((s): s is DenOrgSkillCard => s !== null);
+  return { id: hubId, name: hubName, skills };
+}
+
+function getDenOrgSkillHubsFromPayload(payload: unknown): DenOrgSkillHubParsed[] {
+  if (!isRecord(payload) || !Array.isArray(payload.skillHubs)) {
+    return [];
+  }
+  return payload.skillHubs
+    .map((entry) => (isRecord(entry) ? parseOrgSkillHubEntry(entry) : null))
+    .filter((e): e is DenOrgSkillHubParsed => e !== null);
+}
+
+function parseDenOrgLlmProviderModel(value: unknown): DenOrgLlmProviderModel | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string") {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    name: value.name,
+    config: isRecord(value.config) ? value.config : {},
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : null,
+  };
+}
+
+function parseDenOrgLlmProvider(value: unknown): DenOrgLlmProvider | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.providerId !== "string" ||
+    typeof value.name !== "string" ||
+    (value.source !== "models_dev" && value.source !== "custom")
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    source: value.source,
+    providerId: value.providerId,
+    name: value.name,
+    providerConfig: isRecord(value.providerConfig) ? value.providerConfig : {},
+    hasApiKey: value.hasApiKey === true,
+    models: Array.isArray(value.models)
+      ? value.models.map(parseDenOrgLlmProviderModel).filter((entry): entry is DenOrgLlmProviderModel => entry !== null)
+      : [],
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : null,
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null,
+  };
+}
+
+function getDenOrgLlmProviders(payload: unknown): DenOrgLlmProvider[] {
+  if (!isRecord(payload) || !Array.isArray(payload.llmProviders)) {
+    return [];
+  }
+
+  return payload.llmProviders
+    .map(parseDenOrgLlmProvider)
+    .filter((entry): entry is DenOrgLlmProvider => entry !== null);
+}
+
+function getDenOrgLlmProviderConnection(payload: unknown): DenOrgLlmProviderConnection | null {
+  if (!isRecord(payload) || !payload.llmProvider) {
+    return null;
+  }
+
+  const provider = parseDenOrgLlmProvider(payload.llmProvider);
+  if (!provider || !isRecord(payload.llmProvider)) {
+    return null;
+  }
+
+  return {
+    ...provider,
+    apiKey: typeof payload.llmProvider.apiKey === "string" ? payload.llmProvider.apiKey : null,
+  };
+}
+
 function getBillingPrice(value: unknown): DenBillingPrice | null {
   if (!isRecord(value)) {
     return null;
@@ -550,6 +689,33 @@ function getBillingInvoice(value: unknown): DenBillingInvoice | null {
     invoiceNumber: typeof value.invoiceNumber === "string" ? value.invoiceNumber : null,
     invoiceUrl: typeof value.invoiceUrl === "string" ? value.invoiceUrl : null,
   };
+}
+
+export type DenOrgSkillHubSummary = {
+  id: string;
+  name: string;
+  canManage: boolean;
+};
+
+function getOrgSkillHubSummaries(payload: unknown): DenOrgSkillHubSummary[] {
+  if (!isRecord(payload) || !Array.isArray(payload.skillHubs)) {
+    return [];
+  }
+
+  return payload.skillHubs
+    .map((entry) => {
+      if (!isRecord(entry)) return null;
+      if (typeof entry.id !== "string" || typeof entry.name !== "string" || typeof entry.canManage !== "boolean") {
+        return null;
+      }
+      return { id: entry.id, name: entry.name, canManage: entry.canManage };
+    })
+    .filter((entry): entry is DenOrgSkillHubSummary => Boolean(entry));
+}
+
+function getCreatedOrgSkillId(payload: unknown): string | null {
+  if (!isRecord(payload) || !isRecord(payload.skill)) return null;
+  return typeof payload.skill.id === "string" ? payload.skill.id : null;
 }
 
 function getBillingSummary(payload: unknown): DenBillingSummary | null {
@@ -812,6 +978,86 @@ export function createDenClient(options: { baseUrl: string; token?: string | nul
       }
     },
 
+    async listOrgSkills(orgId: string): Promise<DenOrgSkillCard[]> {
+      const payload = await requestJson<unknown>(baseUrls, `/v1/orgs/${encodeURIComponent(orgId)}/skills`, {
+        method: "GET",
+        token,
+      });
+      return getDenOrgSkillsFromPayload(payload);
+    },
+
+    async listOrgSkillHubs(orgId: string): Promise<DenOrgSkillHubParsed[]> {
+      const payload = await requestJson<unknown>(baseUrls, `/v1/orgs/${encodeURIComponent(orgId)}/skill-hubs`, {
+        method: "GET",
+        token,
+      });
+      return getDenOrgSkillHubsFromPayload(payload);
+    },
+
+    async listOrgSkillHubSummaries(orgId: string): Promise<DenOrgSkillHubSummary[]> {
+      const payload = await requestJson<unknown>(baseUrls, `/v1/orgs/${encodeURIComponent(orgId)}/skill-hubs`, {
+        method: "GET",
+        token,
+      });
+      return getOrgSkillHubSummaries(payload);
+    },
+
+    async createOrgSkill(
+      orgId: string,
+      input: { skillText: string; shared?: "org" | "public" | null },
+    ): Promise<{ id: string }> {
+      const body = {
+        skillText: input.skillText,
+        shared: input.shared === undefined ? ("org" as const) : input.shared,
+      };
+      const payload = await requestJson<unknown>(baseUrls, `/v1/orgs/${encodeURIComponent(orgId)}/skills`, {
+        method: "POST",
+        token,
+        body,
+      });
+      const id = getCreatedOrgSkillId(payload);
+      if (!id) {
+        throw new DenApiError(500, "invalid_skill_payload", "Skill response was missing id.");
+      }
+      return { id };
+    },
+
+    async addOrgSkillToHub(orgId: string, skillHubId: string, skillId: string): Promise<void> {
+      await requestJson<unknown>(
+        baseUrls,
+        `/v1/orgs/${encodeURIComponent(orgId)}/skill-hubs/${encodeURIComponent(skillHubId)}/skills`,
+        {
+          method: "POST",
+          token,
+          body: { skillId },
+        },
+      );
+    },
+
+    async listOrgLlmProviders(orgId: string): Promise<DenOrgLlmProvider[]> {
+      const payload = await requestJson<unknown>(baseUrls, `/v1/orgs/${encodeURIComponent(orgId)}/llm-providers`, {
+        method: "GET",
+        token,
+      });
+      return getDenOrgLlmProviders(payload);
+    },
+
+    async getOrgLlmProviderConnection(orgId: string, llmProviderId: string): Promise<DenOrgLlmProviderConnection> {
+      const payload = await requestJson<unknown>(
+        baseUrls,
+        `/v1/orgs/${encodeURIComponent(orgId)}/llm-providers/${encodeURIComponent(llmProviderId)}/connect`,
+        {
+          method: "GET",
+          token,
+        },
+      );
+      const provider = getDenOrgLlmProviderConnection(payload);
+      if (!provider) {
+        throw new DenApiError(500, "invalid_llm_provider_payload", "LLM provider response was missing connection details.");
+      }
+      return provider;
+    },
+
     async getBillingStatus(options: { includeCheckout?: boolean; includePortal?: boolean; includeInvoices?: boolean } = {}): Promise<DenBillingSummary> {
       const params = new URLSearchParams();
       if (options.includeCheckout) {
@@ -853,4 +1099,27 @@ export function createDenClient(options: { baseUrl: string; token?: string | nul
       };
     },
   };
+}
+
+export async function fetchDenOrgSkillsCatalog(
+  client: ReturnType<typeof createDenClient>,
+  orgId: string,
+): Promise<DenOrgSkillCard[]> {
+  const [hubs, flatSkills] = await Promise.all([client.listOrgSkillHubs(orgId), client.listOrgSkills(orgId)]);
+  const hubNameBySkillId = new Map<string, string>();
+  for (const hub of hubs) {
+    for (const skill of hub.skills) {
+      if (!hubNameBySkillId.has(skill.id)) {
+        hubNameBySkillId.set(skill.id, hub.name);
+      }
+    }
+  }
+  const byId = new Map<string, DenOrgSkillCard>();
+  for (const skill of flatSkills) {
+    byId.set(skill.id, {
+      ...skill,
+      hubName: hubNameBySkillId.get(skill.id) ?? null,
+    });
+  }
+  return [...byId.values()].sort((a, b) => a.title.localeCompare(b.title));
 }

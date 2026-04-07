@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 
+import { t, currentLocale } from "../../i18n";
 import type { StartupPreference, WorkspaceDisplay } from "../types";
 // BEGIN-PANTHEON-OVERRIDE — import Pantheon mode helpers
 import { isPantheonMode, pantheonBaseUrl, isTauriRuntime } from "../utils";
@@ -46,6 +47,7 @@ export function createOpenworkServerStore(options: {
   restartLocalServer: () => Promise<boolean>;
   createRemoteWorkspaceFlow: (input: RemoteWorkspaceInput) => Promise<boolean>;
 }) {
+  const bootStartedAt = Date.now();
   const [openworkServerSettings, setOpenworkServerSettings] = createSignal<OpenworkServerSettings>({});
   const [shareRemoteAccessBusy, setShareRemoteAccessBusy] = createSignal(false);
   const [shareRemoteAccessError, setShareRemoteAccessError] = createSignal<string | null>(null);
@@ -55,6 +57,7 @@ export function createOpenworkServerStore(options: {
     createSignal<OpenworkServerCapabilities | null>(null);
   const [, setOpenworkServerCheckedAt] = createSignal<number | null>(null);
   const [openworkServerHostInfo, setOpenworkServerHostInfo] = createSignal<OpenworkServerInfo | null>(null);
+  const [openworkServerHostInfoReady, setOpenworkServerHostInfoReady] = createSignal(!isTauriRuntime());
   const [openworkServerDiagnostics, setOpenworkServerDiagnostics] =
     createSignal<OpenworkServerDiagnostics | null>(null);
   const [openworkReconnectBusy, setOpenworkReconnectBusy] = createSignal(false);
@@ -172,6 +175,17 @@ export function createOpenworkServerStore(options: {
     }
   };
 
+  const shouldWaitForLocalHostInfo = () =>
+    isTauriRuntime() &&
+    options.startupPreference() !== "server" &&
+    !openworkServerHostInfoReady();
+
+  const shouldRetryStartupCheck = (status: OpenworkServerStatus) =>
+    status !== "connected" &&
+    isTauriRuntime() &&
+    options.startupPreference() !== "server" &&
+    Date.now() - bootStartedAt < 5_000;
+
   createEffect(() => {
     const pref = options.startupPreference();
     const info = openworkServerHostInfo();
@@ -192,6 +206,7 @@ export function createOpenworkServerStore(options: {
   createEffect(() => {
     if (typeof window === "undefined") return;
     if (!options.documentVisible()) return;
+    if (shouldWaitForLocalHostInfo()) return;
     const url = openworkServerBaseUrl().trim();
     const auth = openworkServerAuth();
     const token = auth.token;
@@ -218,7 +233,30 @@ export function createOpenworkServerStore(options: {
       if (busy) return;
       busy = true;
       try {
-        const result = await checkOpenworkServer(url, token, hostToken);
+        let result = await checkOpenworkServer(url, token, hostToken);
+
+        if (shouldRetryStartupCheck(result.status)) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+          if (!active) return;
+
+          try {
+            const info = await openworkServerInfo();
+            if (!active) return;
+
+            setOpenworkServerHostInfo(info);
+            setOpenworkServerHostInfoReady(true);
+
+            const retryUrl = info.baseUrl?.trim() ?? "";
+            const retryToken = info.clientToken?.trim() || undefined;
+            const retryHostToken = info.hostToken?.trim() || undefined;
+            if (retryUrl) {
+              result = await checkOpenworkServer(retryUrl, retryToken, retryHostToken);
+            }
+          } catch {
+            // ignore retry failures and surface the original result below
+          }
+        }
+
         if (!active) return;
         setOpenworkServerStatus(result.status);
         setOpenworkServerCapabilities(result.capabilities);
@@ -257,6 +295,8 @@ export function createOpenworkServerStore(options: {
         if (active) setOpenworkServerHostInfo(info);
       } catch {
         if (active) setOpenworkServerHostInfo(null);
+      } finally {
+        if (active) setOpenworkServerHostInfoReady(true);
       }
     };
 
@@ -447,7 +487,7 @@ export function createOpenworkServerStore(options: {
         if (!active) return;
         setOpenworkAuditEntries([]);
         setOpenworkAuditStatus("error");
-        setOpenworkAuditError(error instanceof Error ? error.message : "Failed to load audit log.");
+        setOpenworkAuditError(error instanceof Error ? error.message : t("app.error_audit_load", currentLocale()));
       } finally {
         busy = false;
       }
@@ -597,7 +637,7 @@ export function createOpenworkServerStore(options: {
       if (isTauriRuntime() && options.selectedWorkspaceDisplay().workspaceType === "local") {
         const restarted = await options.restartLocalServer();
         if (!restarted) {
-          throw new Error("Failed to restart the local worker with the updated sharing setting.");
+          throw new Error(t("app.error_restart_local_worker", currentLocale()));
         }
         await reconnectOpenworkServer();
       }
@@ -606,7 +646,7 @@ export function createOpenworkServerStore(options: {
       setShareRemoteAccessError(
         error instanceof Error
           ? error.message
-          : "Failed to update remote access.",
+          : t("app.error_remote_access", currentLocale()),
       );
       return;
     } finally {
