@@ -46,6 +46,11 @@
       "development": "./src/schema/system.ts",
       "default": "./dist/schema/system.js"
     },
+    "./schema/telemetry": {
+      "types": "./src/schema/telemetry.ts",
+      "development": "./src/schema/telemetry.ts",
+      "default": "./dist/schema/telemetry.js"
+    },
     "./drizzle": {
       "types": "./src/drizzle.ts",
       "development": "./src/drizzle.ts",
@@ -60,6 +65,7 @@
     "db:push": "pnpm run build && node --import tsx ./node_modules/drizzle-kit/bin.cjs push --config drizzle.config.ts"
   },
   "dependencies": {
+    "@openwork/types": "workspace:*",
     "@openwork-ee/utils": "workspace:*",
     "@planetscale/database": "^1.19.0",
     "drizzle-orm": "^0.45.1",

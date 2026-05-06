@@ -1,4 +1,5 @@
 import type { Part, Session } from "@opencode-ai/sdk/v2/client";
+import { t } from "../../i18n";
 import type {
   ArtifactItem,
   MessageGroup,
@@ -9,7 +10,7 @@ import type {
   PlaceholderAssistantMessage,
   ProviderListItem,
 } from "../types";
-import type { WorkspaceInfo } from "../lib/tauri";
+import type { WorkspaceInfo } from "../lib/desktop";
 
 export function formatModelRef(model: ModelRef) {
   return `${model.providerID}/${model.modelID}`;
@@ -72,6 +73,14 @@ export function isTauriRuntime() {
   return typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__ != null;
 }
 
+export function isElectronRuntime() {
+  return typeof window !== "undefined" && (window as Window).__OPENWORK_ELECTRON__ != null;
+}
+
+export function isDesktopRuntime() {
+  return isTauriRuntime() || isElectronRuntime();
+}
+
 // BEGIN-PANTHEON-OVERRIDE — detect when app is configured to use Pantheon as the server
 export function isPantheonMode() {
   const url =
@@ -114,6 +123,7 @@ export async function fetchPantheonProviderList(): Promise<any | null> {
   }
 }
 // END-PANTHEON-OVERRIDE
+
 
 export function isWindowsPlatform() {
   if (typeof navigator === "undefined") return false;
@@ -299,19 +309,19 @@ export function formatRelativeTime(timestampMs: number) {
   const delta = Date.now() - timestampMs;
 
   if (delta < 0) {
-    return "just now";
+    return t("time.just_now");
   }
 
   if (delta < 60_000) {
-    return `${Math.max(1, Math.round(delta / 1000))}s ago`;
+    return t("time.seconds_ago", { count: Math.max(1, Math.round(delta / 1000)) });
   }
 
   if (delta < 60 * 60_000) {
-    return `${Math.max(1, Math.round(delta / 60_000))}m ago`;
+    return t("time.minutes_ago", { count: Math.max(1, Math.round(delta / 60_000)) });
   }
 
   if (delta < 24 * 60 * 60_000) {
-    return `${Math.max(1, Math.round(delta / (60 * 60_000)))}h ago`;
+    return t("time.hours_ago", { count: Math.max(1, Math.round(delta / (60 * 60_000))) });
   }
 
   return new Date(timestampMs).toLocaleDateString();
@@ -365,19 +375,28 @@ export function isSandboxWorkspace(workspace: WorkspaceInfo) {
   return (
     workspace.workspaceType === "remote" &&
     (workspace.sandboxBackend === "docker" ||
+      workspace.sandboxBackend === "microsandbox" ||
       Boolean(workspace.sandboxRunId?.trim()) ||
       Boolean(workspace.sandboxContainerName?.trim()))
   );
 }
 
+export function redactTokenLikeText(value: string): string {
+  return value
+    .replace(/([?&](?:access_token|api_key|key|password|token)=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/\b(authorization:\s*bearer\s+)[^\s,]+/gi, "$1[redacted]")
+    .replace(/\b(bearer\s+)[a-z0-9._~+/=-]+/gi, "$1[redacted]")
+    .replace(/\bowt_[a-z0-9_-]+\b/gi, "owt_[redacted]");
+}
+
 export function getWorkspaceTaskLoadErrorDisplay(workspace: WorkspaceInfo, error?: string | null) {
-  const raw = error?.trim() ?? "";
+  const raw = redactTokenLikeText(error?.trim() ?? "");
   const fallbackTitle = raw || "Failed to load tasks";
   if (!raw || !isSandboxWorkspace(workspace)) {
     return {
       tone: "error" as const,
       label: "Error",
-      message: "Failed to load tasks",
+      message: raw && workspace.workspaceType === "remote" ? raw : "Failed to load tasks",
       title: fallbackTitle,
     };
   }
