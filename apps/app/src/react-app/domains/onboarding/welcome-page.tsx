@@ -11,7 +11,7 @@ type CapabilityCardProps = {
 function CapabilityCard({ icon, title, description }: CapabilityCardProps) {
   return (
     <div className="flex flex-col items-center gap-2 rounded-2xl border border-dls-border bg-dls-surface p-5 text-center transition-colors">
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-dls-border bg-dls-hover text-dls-secondary">
+      <div className="flex size-10 items-center justify-center rounded-xl border border-dls-border bg-dls-hover text-dls-secondary">
         {icon}
       </div>
       <div className="text-[14px] font-medium text-dls-text">{title}</div>
@@ -28,11 +28,12 @@ type WelcomePageProps = {
 
 export function WelcomePage({ onGetStarted }: WelcomePageProps) {
   return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-dls-background p-6">
+    <div className="relative flex min-h-screen w-full items-center justify-center bg-dls-background p-6">
+      <div className="absolute inset-x-0 top-0 h-10 mac:titlebar-drag" />
       <div className="mx-auto w-full max-w-[640px] space-y-10">
         {/* Header */}
         <div className="space-y-3 text-center">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl border border-dls-border bg-dls-surface shadow-sm">
+          <div className="mx-auto flex size-16 items-center justify-center rounded-3xl border border-dls-border bg-dls-surface shadow-sm">
             <Bot size={28} className="text-dls-accent" />
           </div>
           <h1 className="text-[28px] font-semibold tracking-[-0.5px] text-dls-text">

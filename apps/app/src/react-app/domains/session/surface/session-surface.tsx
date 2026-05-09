@@ -33,6 +33,7 @@ import type { ReactComposerNotice } from "./composer/notice";
 import { SessionDebugPanel } from "./debug-panel";
 import { deriveRenderedSessionMessages, resolveRenderedSessionSnapshot } from "./session-render-state";
 import { SessionTranscript } from "./message-list";
+import { useLocal } from "../../../kernel/local-provider";
 import { deriveSessionRenderModel } from "../sync/transition-controller";
 import { useSessionScrollController } from "./scroll-controller";
 import {
@@ -105,8 +106,10 @@ function messageToReadableText(message: UIMessage) {
 
 function transcriptToText(messages: UIMessage[]) {
   return messages
-    .map(messageToReadableText)
-    .filter(Boolean)
+    .flatMap((message) => {
+      const text = messageToReadableText(message);
+      return text ? [text] : [];
+    })
     .join("\n\n---\n\n");
 }
 
@@ -246,6 +249,8 @@ function revokeAttachmentPreview(attachment: { previewUrl?: string | undefined }
 }
 
 export function SessionSurface(props: SessionSurfaceProps) {
+  const local = useLocal();
+  const showThinking = local.prefs.showThinking;
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [mentions, setMentions] = useState<Record<string, "agent" | "file">>({});
@@ -890,6 +895,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                     messages={renderedMessages}
                     isStreaming={chatStreaming}
                     developerMode={props.developerMode}
+                    showThinking={showThinking}
                     scrollElement={() => scrollRef.current}
                   />
                   {error ? (

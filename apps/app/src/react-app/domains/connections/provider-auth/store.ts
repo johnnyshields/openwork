@@ -153,7 +153,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
 
   const getCloudProviderEnv = (config: Record<string, unknown>) =>
     getStringList(config.env);
-  const sortStrings = (values: string[]) => [...values].sort();
+  const sortStrings = (values: string[]) => values.toSorted();
   const sameStringList = (a: string[], b: string[]) =>
     a.length === b.length && a.every((value, index) => value === b[index]);
 
@@ -187,7 +187,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       });
     }
 
-    return [...merged.values()].sort(compareProviders);
+    return Array.from(merged.values()).toSorted(compareProviders);
   };
 
   const refreshSnapshot = () => {
@@ -531,7 +531,10 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
   };
 
   const getProviderModelIds = (provider: Pick<DenOrgLlmProvider, "models">) =>
-    provider.models.map((model) => model.id.trim()).filter(Boolean).sort();
+    provider.models.flatMap((model) => {
+      const id = model.id.trim();
+      return id ? [id] : [];
+    }).sort();
 
   const formatConfigWithCloudProvider = (
     raw: string,
@@ -854,15 +857,16 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
 
     for (const provider of availableProviders ?? []) {
       const id = provider.id?.trim();
-      if (!id || id === "opencode") continue;
+      if (!id) continue;
       if (!Array.isArray(provider.env) || provider.env.length === 0) continue;
       const existing = merged[id] ?? [];
       if (existing.some((method) => method.type === "api")) continue;
       merged[id] = [...existing, { type: "api", label: t("providers.api_key_label") }];
     }
 
+    const availableProvidersById = new Map((availableProviders ?? []).map((provider) => [provider.id, provider]));
     for (const [id, providerMethods] of Object.entries(merged)) {
-      const provider = availableProviders.find((item) => item.id === id);
+      const provider = availableProvidersById.get(id);
       const normalizedId = id.trim().toLowerCase();
       const normalizedName = provider?.name?.trim().toLowerCase() ?? "";
       const isOpenAiProvider = normalizedId === "openai" || normalizedName === "openai";
@@ -870,7 +874,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       merged[id] = providerMethods.filter((method) => {
         if (method.type !== "oauth") return true;
         const label = method.label.toLowerCase();
-        const isHeadless = label.includes("headless") || label.includes("device");
+        const isHeadless = /headless|device/.test(label);
         return workerType === "remote" ? isHeadless : !isHeadless;
       });
     }
@@ -1053,7 +1057,8 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       while (Date.now() - startedAt < timeoutMs) {
         try {
           const updated = await refreshProviders({ dispose: true });
-          if (Array.isArray(updated?.connected) && updated.connected.includes(resolved)) {
+          const connected = new Set(updated?.connected ?? []);
+          if (connected.has(resolved)) {
             return true;
           }
         } catch {
@@ -1325,8 +1330,10 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       return;
     }
 
-    const importedProviders = await refreshImportedCloudProviders();
-    const liveProviders = await refreshCloudOrgProviders({ force: true });
+    const [importedProviders, liveProviders] = await Promise.all([
+      refreshImportedCloudProviders(),
+      refreshCloudOrgProviders({ force: true }),
+    ]);
     const liveProviderMap = new Map(liveProviders.map((provider) => [provider.id, provider]));
     const failures: string[] = [];
     const processedLiveProviderIds = new Set<string>();

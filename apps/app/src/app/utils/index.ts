@@ -48,13 +48,13 @@ const humanizeModelLabel = (value: string) => {
 
   return cleaned
     .split(" ")
-    .filter(Boolean)
-    .map((word) => {
+    .flatMap((word) => {
+      if (!word) return [];
       if (/\d/.test(word) || word.length <= 3) {
-        return word.toUpperCase();
+        return [word.toUpperCase()];
       }
       const lower = word.toLowerCase();
-      return lower.charAt(0).toUpperCase() + lower.slice(1);
+      return [lower.charAt(0).toUpperCase() + lower.slice(1)];
     })
     .join(" ");
 };
@@ -69,16 +69,12 @@ export function formatModelLabel(model: ModelRef, providers: ProviderListItem[] 
   return `${providerLabel} · ${modelLabel}`;
 }
 
-export function isTauriRuntime() {
-  return typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__ != null;
-}
-
 export function isElectronRuntime() {
   return typeof window !== "undefined" && (window as Window).__OPENWORK_ELECTRON__ != null;
 }
 
 export function isDesktopRuntime() {
-  return isTauriRuntime() || isElectronRuntime();
+  return isElectronRuntime();
 }
 
 // BEGIN-PANTHEON-OVERRIDE — detect when app is configured to use Pantheon as the server
@@ -381,6 +377,20 @@ export function isSandboxWorkspace(workspace: WorkspaceInfo) {
   );
 }
 
+export function isRemoteConnectionWorkspace(workspace: WorkspaceInfo) {
+  return workspace.id.trim().startsWith("rem_");
+}
+
+export function isRemoteConnectionErrorMessage(message?: string | null) {
+  const value = message?.trim().toLowerCase() ?? "";
+  return (
+    value.includes("remote worker") ||
+    value.includes("cannot reach ") ||
+    value.includes("health check failed") ||
+    value.includes("worker connection failed")
+  );
+}
+
 export function redactTokenLikeText(value: string): string {
   return value
     .replace(/([?&](?:access_token|api_key|key|password|token)=)[^&\s]+/gi, "$1[redacted]")
@@ -465,7 +475,7 @@ export function parseTemplateFrontmatter(raw: string) {
   for (const line of header.split(/\r?\n/)) {
     const entry = line.trim();
     if (!entry) continue;
-    const colonIndex = entry.indexOf(":");
+    const colonIndex = entry.search(":");
     if (colonIndex === -1) continue;
     const key = entry.slice(0, colonIndex).trim();
     let value = entry.slice(colonIndex + 1).trim();
@@ -679,8 +689,7 @@ function formatAgentLabel(value: string): string {
   if (!clean) return "";
   return clean
     .split(/\s+/)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .flatMap((segment) => segment ? [segment.charAt(0).toUpperCase() + segment.slice(1)] : [])
     .join(" ");
 }
 
@@ -837,7 +846,7 @@ function buildToolDetail(state: any, toolName: string): string | undefined {
   // For edits that report updated files, show filename(s)
   const files = state?.files;
   if (Array.isArray(files) && files.length > 0) {
-    const names = files.filter((f: any) => typeof f === "string").map(extractFilename);
+    const names = files.flatMap((f: any) => typeof f === "string" ? [extractFilename(f)] : []);
     if (names.length === 1) return names[0];
     if (names.length > 1) return `${names[0]} +${names.length - 1} more`;
   }
@@ -973,8 +982,10 @@ export function summarizeStep(part: Part): { title: string; detail?: string; isS
 
     const lines = text
       .split(/\r?\n/)
-      .map((line: string) => line.trim())
-      .filter(Boolean);
+      .flatMap((line: string) => {
+        const trimmed = line.trim();
+        return trimmed ? [trimmed] : [];
+      });
     const compact = lines.join(" ");
 
     let headline = "";
@@ -1057,16 +1068,14 @@ export function deriveArtifacts(list: MessageWithParts[], options: DeriveArtifac
           ? state.output.slice(0, ARTIFACT_OUTPUT_SCAN_LIMIT)
           : "";
 
-      const text = [titleText, outputText]
-        .filter((v): v is string => Boolean(v))
-        .join(" ");
+      const text = [titleText, outputText].flatMap((value) => value ? [value] : []).join(" ");
 
       if (text) {
         ARTIFACT_PATH_PATTERN.lastIndex = 0;
-        Array.from(text.matchAll(ARTIFACT_PATH_PATTERN))
-          .map((m) => m[1])
-          .filter((f) => f && f.length <= 500)
-          .forEach((f) => matches.add(f));
+        for (const match of text.matchAll(ARTIFACT_PATH_PATTERN)) {
+          const file = match[1];
+          if (file && file.length <= 500) matches.add(file);
+        }
       }
 
       if (matches.size === 0) return;

@@ -117,6 +117,7 @@ export function useDesktopRuntimeBoot() {
               baseUrl?: string | null;
               ownerToken?: string | null;
               clientToken?: string | null;
+              hostToken?: string | null;
               port?: number | null;
               remoteAccessEnabled?: boolean;
             };
@@ -137,6 +138,16 @@ export function useDesktopRuntimeBoot() {
           }
           const serverInfo = boot.openworkServer;
           if (serverInfo?.baseUrl) {
+            writeOpenworkServerSettings({
+              urlOverride: serverInfo.baseUrl,
+              token:
+                serverInfo.ownerToken?.trim() ||
+                serverInfo.clientToken?.trim() ||
+                undefined,
+              hostToken: serverInfo.hostToken?.trim() || undefined,
+              portOverride: serverInfo.port ?? undefined,
+              remoteAccessEnabled: serverInfo.remoteAccessEnabled === true,
+            });
             try {
               window.dispatchEvent(new CustomEvent("openwork-server-settings-changed"));
             } catch {
@@ -186,14 +197,17 @@ export function useDesktopRuntimeBoot() {
         // SLOW PATH ─────────────────────────────────────────────────────
         // No running engine. Tauri now mirrors Electron: engine_start boots
         // openwork-server and lets that server manage OpenCode.
-        const localPaths = list.workspaces
-          .filter((entry) => entry.workspaceType !== "remote")
-          .map((entry) => entry.path?.trim() ?? "")
-          .filter((path): path is string => path.length > 0);
+        const localPaths = list.workspaces.flatMap((entry) => {
+          const path = entry.workspaceType !== "remote" ? entry.path?.trim() ?? "" : "";
+          return path ? [path] : [];
+        });
         const workspacePathsFor = (root: string) => {
           const paths = [root];
+          const pathSet = new Set(paths);
           for (const path of localPaths) {
-            if (!paths.includes(path)) paths.push(path);
+            if (pathSet.has(path)) continue;
+            paths.push(path);
+            pathSet.add(path);
           }
           return paths;
         };
