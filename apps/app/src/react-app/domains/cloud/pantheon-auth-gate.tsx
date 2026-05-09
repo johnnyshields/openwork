@@ -1,8 +1,9 @@
 /** @jsxImportSource react */
-// BEGIN-PANTHEON-OVERRIDE — OIDC login gate for Pantheon authentication (React port)
-import { useEffect, useRef, useState, type ReactNode } from "react";
+// BEGIN-PANTHEON-OVERRIDE — OIDC login gate for Pantheon authentication (React port, Electron)
+import { useEffect, useState, type ReactNode } from "react";
 
-import { isTauriRuntime, pantheonBaseUrl } from "../../../app/utils";
+import { pantheonBaseUrl } from "../../../app/utils";
+import { useBootState } from "../../shell/boot-state";
 
 // ---------------------------------------------------------------------------
 // Crypto helpers
@@ -27,19 +28,15 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch wrapper — use Tauri plugin-http when in Tauri, else globalThis.fetch
+// Fetch wrapper — Electron renderer can call globalThis.fetch directly; the
+// 8s timeout guards against a hung Pantheon backend.
 // ---------------------------------------------------------------------------
 
 async function authFetch(input: string, init?: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
-  const merged = { ...init, signal: controller.signal };
   try {
-    if (isTauriRuntime()) {
-      const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-      return await tauriFetch(input, merged);
-    }
-    return await globalThis.fetch(input, merged);
+    return await globalThis.fetch(input, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timeout);
   }
@@ -57,13 +54,15 @@ export function PantheonAuthGate({ children }: PantheonAuthGateProps) {
   const [authenticated, setAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const eventCleanupRef = useRef<(() => void) | undefined>(undefined);
+  const { markRouteReady } = useBootState();
 
+  // Lift the full-screen boot overlay (LoadingOverlay) once the gate has
+  // decided what to render. Without this, the overlay's pointer-events:auto
+  // surface sits on top of the sign-in card and swallows every click.
+  // ForcedSigninPage does the same thing for the Den signin path.
   useEffect(() => {
-    return () => {
-      eventCleanupRef.current?.();
-    };
-  }, []);
+    if (!loading) markRouteReady();
+  }, [loading, markRouteReady]);
 
   // Try to restore an existing session on mount
   useEffect(() => {
@@ -180,69 +179,49 @@ export function PantheonAuthGate({ children }: PantheonAuthGateProps) {
 
       console.log("[pantheon-auth] starting OIDC flow, redirect_uri =", redirectUri);
 
-      if (isTauriRuntime()) {
-        const { listen } = await import("@tauri-apps/api/event");
-        const unlisten = await listen<{ code: string; state: string }>(
-          "pantheon:auth-callback",
-          (event) => {
-            console.log("[pantheon-auth] received auth callback event");
-            unlisten();
-            void exchangeCodeForToken(event.payload.code, event.payload.state);
-          },
-        );
-        eventCleanupRef.current = unlisten;
+      const electronBeginAuth =
+        typeof window !== "undefined"
+          ? window.__OPENWORK_ELECTRON__?.pantheon?.beginAuth
+          : undefined;
 
-        const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-        console.log("[pantheon-auth] creating login webview window");
-
-        const loginWindow = new WebviewWindow("pantheon-login", {
-          url: authUrl,
-          title: "Sign in — OpenWork",
-          width: 500,
-          height: 700,
-          center: true,
-          resizable: true,
-        });
-
-        loginWindow.once("tauri://created", () => {
-          console.log("[pantheon-auth] login window created");
-        });
-
-        loginWindow.once("tauri://error", (e) => {
-          console.log("[pantheon-auth] login window creation failed:", e);
-          setError("Failed to open login window");
+      if (electronBeginAuth) {
+        console.log("[pantheon-auth] opening Electron OIDC popup");
+        const result = await electronBeginAuth(authUrl, redirectUri);
+        if (result?.code && result.state) {
+          console.log("[pantheon-auth] received auth callback from Electron popup");
+          await exchangeCodeForToken(result.code, result.state);
+        } else {
+          console.log("[pantheon-auth] Electron popup closed without completing");
           setLoading(false);
-        });
+        }
+        return;
+      }
 
-        loginWindow.onCloseRequested(() => {
+      // Plain-browser fallback (e.g. `vite dev` against Pantheon). Relies on
+      // the OIDC callback page postMessage'ing `pantheon-oidc-callback` back
+      // to the opener, which only works when Pantheon's /oauth/callback is
+      // served from the same origin as the renderer.
+      const popup = window.open(authUrl, "pantheon-oidc", "width=500,height=700");
+
+      const onMessage = async (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) return;
+        if ((event.data as { type?: string } | null)?.type !== "pantheon-oidc-callback") return;
+        window.removeEventListener("message", onMessage);
+        const { code, state: returnedState } = event.data as { code: string; state: string };
+        await exchangeCodeForToken(code, returnedState);
+      };
+
+      window.addEventListener("message", onMessage);
+
+      const pollTimer = setInterval(() => {
+        if (popup && popup.closed) {
+          clearInterval(pollTimer);
+          window.removeEventListener("message", onMessage);
           if (!authenticated) {
-            console.log("[pantheon-auth] login window closed without completing");
             setLoading(false);
           }
-        });
-      } else {
-        const popup = window.open(authUrl, "pantheon-oidc", "width=500,height=700");
-
-        const onMessage = async (event: MessageEvent) => {
-          if (event.origin !== window.location.origin) return;
-          if ((event.data as { type?: string } | null)?.type !== "pantheon-oidc-callback") return;
-          window.removeEventListener("message", onMessage);
-          const { code, state: returnedState } = event.data as { code: string; state: string };
-          await exchangeCodeForToken(code, returnedState);
-        };
-
-        window.addEventListener("message", onMessage);
-
-        const pollTimer = setInterval(() => {
-          if (popup && popup.closed) {
-            clearInterval(pollTimer);
-            window.removeEventListener("message", onMessage);
-            if (!authenticated) {
-              setLoading(false);
-            }
-          }
-        }, 500);
-      }
+        }
+      }, 500);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to start login";
       console.log("[pantheon-auth] login start failed:", err);

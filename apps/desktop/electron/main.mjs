@@ -1737,6 +1737,81 @@ ipcMain.handle("openwork:browser:state", () => {
 });
 ipcMain.handle("openwork:browser:destroy", () => destroyBrowserView());
 
+// BEGIN-PANTHEON-OVERRIDE — OIDC popup for Pantheon sign-in
+// The renderer cannot open a child BrowserWindow on its own (the main window's
+// `setWindowOpenHandler` punts non-loopback URLs to `shell.openExternal`), and
+// Pantheon's OIDC callback can't `postMessage` back across the file:// origin
+// gap anyway. This handler runs the OIDC popup from the main process: it loads
+// `authUrl` in a fresh BrowserWindow, intercepts navigation to `redirectUri`
+// before the Pantheon /oauth/callback page actually loads, parses the code +
+// state from the URL, closes the popup, and resolves with the result.
+ipcMain.handle("openwork:pantheon:beginAuth", async (event, authUrl, redirectUri) => {
+  if (typeof authUrl !== "string" || !authUrl.trim()) return null;
+  if (typeof redirectUri !== "string" || !redirectUri.trim()) return null;
+
+  const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const popup = new BrowserWindow({
+    width: 500,
+    height: 700,
+    parent,
+    modal: false,
+    title: "Sign in — OpenWork",
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      try {
+        if (!popup.isDestroyed()) popup.destroy();
+      } catch {
+        // ignore
+      }
+      resolve(result);
+    };
+
+    const tryIntercept = (e, url) => {
+      if (typeof url !== "string") return;
+      if (!url.startsWith(redirectUri)) return;
+      try {
+        e?.preventDefault?.();
+      } catch {
+        // ignore
+      }
+      try {
+        const parsed = new URL(url);
+        const code = parsed.searchParams.get("code");
+        const state = parsed.searchParams.get("state");
+        if (code && state) {
+          finish({ code, state });
+          return;
+        }
+      } catch {
+        // fall through to null result
+      }
+      finish(null);
+    };
+
+    popup.webContents.on("will-redirect", (e, url) => tryIntercept(e, url));
+    popup.webContents.on("will-navigate", (e, url) => tryIntercept(e, url));
+    // Belt-and-suspenders: some redirects (especially server-side 302s in
+    // single-page flows) only surface here.
+    popup.webContents.on("did-navigate", (_e, url) => tryIntercept(null, url));
+
+    popup.on("closed", () => finish(null));
+
+    popup.loadURL(authUrl).catch(() => finish(null));
+  });
+});
+// END-PANTHEON-OVERRIDE
+
 registerMigrationIpc({ app, ipcMain });
 const { ensureAutoUpdater } = registerUpdaterIpc({ app, ipcMain, getMainWindow: () => mainWindow });
 

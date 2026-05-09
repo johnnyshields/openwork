@@ -42,6 +42,14 @@ declare global {
         download?: () => Promise<{ ok: boolean; reason?: string }>;
         installAndRestart?: () => Promise<{ ok: boolean; reason?: string }>;
       };
+      // BEGIN-PANTHEON-OVERRIDE — OIDC popup IPC exposed by preload
+      pantheon?: {
+        beginAuth?: (
+          authUrl: string,
+          redirectUri: string,
+        ) => Promise<{ code: string; state: string } | null>;
+      };
+      // END-PANTHEON-OVERRIDE
       browser?: {
         show?: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
         hide?: () => Promise<void>;

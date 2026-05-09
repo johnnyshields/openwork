@@ -69,6 +69,13 @@ contextBridge.exposeInMainWorld("__OPENWORK_ELECTRON__", {
       return () => ipcRenderer.removeListener("openwork:browser:state", handler);
     },
   },
+  // BEGIN-PANTHEON-OVERRIDE — expose OIDC popup IPC to the renderer
+  pantheon: {
+    beginAuth(authUrl, redirectUri) {
+      return ipcRenderer.invoke("openwork:pantheon:beginAuth", authUrl, redirectUri);
+    },
+  },
+  // END-PANTHEON-OVERRIDE
   meta: {
     initialDeepLinks: [],
     platform: normalizePlatform(process.platform),
