@@ -26,7 +26,9 @@ import type {
   ProviderListItem,
   WorkspaceDisplay,
 } from "../../../../app/types";
-import { isDesktopRuntime, safeStringify } from "../../../../app/utils";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon curated provider list fetch
+import { fetchPantheonProviderList, isDesktopRuntime, safeStringify } from "../../../../app/utils";
+// END-PANTHEON-OVERRIDE
 import {
   compareProviders,
   filterProviderList,
@@ -1001,7 +1003,9 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
 
     try {
       const updated = filterProviderList(
-        unwrap(await activeClient.provider.list()),
+        // BEGIN-PANTHEON-OVERRIDE — use Pantheon curated provider list when available
+        (await fetchPantheonProviderList()) ?? unwrap(await activeClient.provider.list()),
+        // END-PANTHEON-OVERRIDE
         disabledProviders,
       );
       applyProviderListState(updated);

@@ -415,6 +415,65 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
   const openworkServerState = createOpenworkServerState();
   const orchestratorState = createOrchestratorState();
 
+  // BEGIN-PANTHEON-OVERRIDE — credentials passed through to managed opencode
+  // Pantheon's published opencode config (https://<base>/tools/opencode/config.json)
+  // expects PANTHEON_API_URL + PANTHEON_API_KEY in opencode's process env. The
+  // renderer pushes these via IPC after OIDC sign-in; openwork-server inherits
+  // process.env when spawning opencode (see apps/server/src/managed-opencode.ts),
+  // so we just need to inject them into the openwork-server child env, and seed
+  // an opencode user config file that uses ${PANTHEON_API_URL} interpolation.
+  const pantheonCredentials = { apiUrl: null, apiKey: null };
+  function pantheonOpencodeConfigDir() {
+    return path.join(app.getPath("userData"), "pantheon-opencode-config");
+  }
+  function pantheonToolsBase(apiUrl) {
+    return apiUrl.replace(/\/ai\/?$/, "/tools");
+  }
+  async function syncPantheonOpencodeConfig() {
+    if (!pantheonCredentials.apiUrl) return;
+    const toolsBase = pantheonToolsBase(pantheonCredentials.apiUrl);
+    const configUrl = `${toolsBase}/opencode/config.json`;
+    const configDir = pantheonOpencodeConfigDir();
+    const configPath = path.join(configDir, "opencode.json");
+    try {
+      const res = await fetch(configUrl);
+      if (!res.ok) {
+        console.error(`[pantheon] failed to fetch opencode config (${res.status}) from ${configUrl}`);
+        return;
+      }
+      const text = await res.text();
+      // Validate JSON before writing so a broken upstream response doesn't
+      // clobber a previously-good config on disk.
+      JSON.parse(text);
+      await mkdir(configDir, { recursive: true });
+      await writeFile(configPath, text, "utf8");
+      console.log(`[pantheon] wrote opencode config to ${configPath}`);
+    } catch (error) {
+      console.error("[pantheon] syncPantheonOpencodeConfig failed:", error);
+    }
+  }
+  async function setPantheonCredentials(next) {
+    const apiUrl = typeof next?.apiUrl === "string" ? next.apiUrl.trim() : "";
+    const apiKey = typeof next?.apiKey === "string" ? next.apiKey.trim() : "";
+    const prevKey = pantheonCredentials.apiKey;
+    pantheonCredentials.apiUrl = apiUrl || null;
+    pantheonCredentials.apiKey = apiKey || null;
+    // Sequence: write the opencode config FIRST (must exist before opencode
+    // restarts and reads OPENCODE_CONFIG_DIR — otherwise opencode boots without
+    // a Pantheon provider and AI calls fail / opencode crashes).
+    if (apiUrl) {
+      await syncPantheonOpencodeConfig();
+    }
+    // Only restart the engine if the API key actually changed (covers
+    // null -> JWT on first sign-in) and a workspace is already active.
+    if (apiKey !== prevKey && engineState.projectDir) {
+      await withRuntimeLifecycle(() => engineRestart()).catch((error) => {
+        console.error("[pantheon] engineRestart after credentials update failed:", error);
+      });
+    }
+  }
+  // END-PANTHEON-OVERRIDE
+
   // Serialize engine lifecycle operations. Without this, concurrent renderer
   // invocations of engineStart/engineStop/engineRestart race: each call's
   // stopAllRuntimeChildren kills the previous call's freshly-spawned
@@ -602,6 +661,11 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
       ...loadUserEnvFile(),
       ...process.env,
       BUN_CONFIG_DNS_RESULT_ORDER: "verbatim",
+      // BEGIN-PANTHEON-OVERRIDE — propagate Pantheon AI proxy credentials to
+      // openwork-server, which inherits them when spawning managed opencode.
+      ...(pantheonCredentials.apiUrl ? { PANTHEON_API_URL: pantheonCredentials.apiUrl } : {}),
+      ...(pantheonCredentials.apiKey ? { PANTHEON_API_KEY: pantheonCredentials.apiKey } : {}),
+      // END-PANTHEON-OVERRIDE
       ...extra,
     };
     const pathKey =
@@ -625,6 +689,18 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
       env.OPENCODE_CONFIG_DIR = devPaths.opencodeConfigDir;
       env.OPENCODE_TEST_HOME = devPaths.homeDir;
     }
+    // BEGIN-PANTHEON-OVERRIDE — point opencode at the Pantheon-templated config
+    // when we have credentials AND the config file is actually on disk. Pointing
+    // OPENCODE_CONFIG_DIR at an empty/nonexistent dir would make opencode boot
+    // without a provider and crash the AI path; better to fall back to opencode's
+    // default config in that race window.
+    if (pantheonCredentials.apiUrl && pantheonCredentials.apiKey) {
+      const configDir = pantheonOpencodeConfigDir();
+      if (existsSync(path.join(configDir, "opencode.json"))) {
+        env.OPENCODE_CONFIG_DIR = configDir;
+      }
+    }
+    // END-PANTHEON-OVERRIDE
     return env;
   }
 
@@ -1019,6 +1095,10 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
     if (!embeddedPath) {
       throw new Error(`Cannot find OpenWork embedded server bundle. Checked: ${candidates.join(", ")}`);
     }
+    // Tag every line the embedded server logger emits so the preload-side
+    // demuxer can label them [ow-server] in the renderer console (otherwise
+    // they're indistinguishable from other Electron-main stdout writers).
+    process.env.OPENWORK_SERVER_LOG_PREFIX = "[ow-server] ";
     const { startEmbeddedServer } = await import(pathToFileURL(embeddedPath).href);
     const handle = await startEmbeddedServer({
       host,
@@ -1247,14 +1327,20 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
 
   async function ensureOpenwork(options) {
     let openworkServer;
+    // When manageOpencode=true, the freshly-spawned openwork-server must boot
+    // its OWN opencode child — handing it `engineState.baseUrl` (which still
+    // holds the previous run's opencode URL after prepareFreshRuntime kills
+    // the child) makes apps/server skip the spawn and route every request to
+    // a dead port. openworkServerRestart already does this; align here too.
+    const managing = options.manageOpencode === true;
     try {
       openworkServer = await startOpenworkServer({
         workspacePaths: options.workspacePaths,
-        opencodeBaseUrl: engineState.baseUrl,
-        opencodeUsername: engineState.opencodeUsername,
-        opencodePassword: engineState.opencodePassword,
+        opencodeBaseUrl: managing ? null : engineState.baseUrl,
+        opencodeUsername: managing ? null : engineState.opencodeUsername,
+        opencodePassword: managing ? null : engineState.opencodePassword,
         remoteAccessEnabled: options.remoteAccessEnabled,
-        manageOpencode: options.manageOpencode === true,
+        manageOpencode: managing,
         opencodeBinPath: options.opencodeBinPath,
       });
     } catch (error) {
@@ -1285,6 +1371,13 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
       engineState.projectDir = safeProjectDir;
       engineState.child = null;
       engineState.childExited = true;
+      // prepareFreshRuntime() above killed the previous opencode; drop its
+      // stale URL/credentials so a fresh spawn is required (and seen).
+      engineState.baseUrl = null;
+      engineState.hostname = null;
+      engineState.port = null;
+      engineState.opencodeUsername = null;
+      engineState.opencodePassword = null;
 
       await ensureOpenwork({
         projectDir: safeProjectDir,
@@ -1771,5 +1864,8 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
     sandboxStop,
     sandboxCleanupOpenworkContainers,
     sandboxDebugProbe,
+    // BEGIN-PANTHEON-OVERRIDE — expose Pantheon credentials setter to main.mjs
+    setPantheonCredentials,
+    // END-PANTHEON-OVERRIDE
   };
 }

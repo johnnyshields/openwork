@@ -162,13 +162,6 @@ export function defaultBlueprintStartersForPreset(preset: string): WorkspaceBlue
           prompt: t("blueprint.starter_csv_prompt"),
         },
         {
-          id: "starter-connect-openai",
-          kind: "action",
-          title: t("blueprint.starter_connect_openai_title"),
-          description: t("blueprint.starter_connect_openai_desc"),
-          action: "connect-openai",
-        },
-        {
           id: "browser-automation",
           kind: "session",
           title: t("blueprint.starter_chrome_title"),

@@ -77,6 +77,43 @@ export function isDesktopRuntime() {
   return isElectronRuntime();
 }
 
+// BEGIN-PANTHEON-OVERRIDE — detect when app is configured to use Pantheon as the server
+export function isPantheonMode() {
+  const url =
+    typeof import.meta.env?.VITE_PANTHEON_BASE_URL === "string"
+      ? import.meta.env.VITE_PANTHEON_BASE_URL.trim()
+      : "";
+  return url.length > 0;
+}
+
+export function pantheonBaseUrl() {
+  return (import.meta.env.VITE_PANTHEON_BASE_URL as string).trim().replace(/\/+$/, "");
+}
+
+/**
+ * Fetch the curated provider list from Pantheon.
+ * Returns the provider list response, or null if the fetch fails.
+ */
+export async function fetchPantheonProviderList(): Promise<any | null> {
+  if (!isPantheonMode()) return null;
+  try {
+    const base = pantheonBaseUrl();
+    const token = (typeof window !== "undefined"
+      ? window.localStorage.getItem("pantheon.jwt")
+      : null) ?? "";
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+    const resp = await globalThis.fetch(`${base}/openwork/api/w/_/opencode/provider`, { headers });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+// END-PANTHEON-OVERRIDE
+
+
 export function isWindowsPlatform() {
   if (typeof navigator === "undefined") return false;
 

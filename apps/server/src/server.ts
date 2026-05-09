@@ -100,6 +100,10 @@ export function createServerLogger(config: ServerConfig): ServerLogger {
     "process.pid": process.pid,
   };
 
+  // OPENWORK_SERVER_LOG_PREFIX lets embedders (e.g. apps/desktop/electron)
+  // tag every emitted line so a downstream demuxer can distinguish openwork-
+  // server output from sibling logs sharing the same stdout.
+  const linePrefix = process.env.OPENWORK_SERVER_LOG_PREFIX ?? "";
   const emit = (level: LogLevel, message: string, attributes?: LogAttributes) => {
     const merged = { ...baseAttributes, ...(attributes ?? {}) };
     if (config.logFormat === "json") {
@@ -111,10 +115,10 @@ export function createServerLogger(config: ServerConfig): ServerLogger {
         attributes: merged,
         resource,
       };
-      process.stdout.write(`${JSON.stringify(record)}\n`);
+      process.stdout.write(`${linePrefix}${JSON.stringify(record)}\n`);
       return;
     }
-    process.stdout.write(`${message}\n`);
+    process.stdout.write(`${linePrefix}${message}\n`);
   };
 
   return { log: emit };

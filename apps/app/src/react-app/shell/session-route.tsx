@@ -56,6 +56,9 @@ import type {
 } from "../../app/types";
 import { buildFeedbackUrl } from "../../app/lib/feedback";
 import {
+  // BEGIN-PANTHEON-OVERRIDE — import Pantheon curated provider list fetch
+  fetchPantheonProviderList,
+  // END-PANTHEON-OVERRIDE
   getWorkspaceTaskLoadErrorDisplay,
   isDesktopRuntime,
   isSandboxWorkspace,
@@ -1322,7 +1325,9 @@ export function SessionRoute() {
       try {
         applyProviderState(
           filterProviderList(
-            unwrap(await opencodeClient.provider.list()),
+            // BEGIN-PANTHEON-OVERRIDE — use Pantheon curated provider list when available
+            (await fetchPantheonProviderList()) ?? unwrap(await opencodeClient.provider.list()),
+            // END-PANTHEON-OVERRIDE
             disabledProviders,
           ),
         );

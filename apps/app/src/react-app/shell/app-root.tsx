@@ -5,6 +5,11 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-
 
 import { readDenBootstrapConfig } from "../../app/lib/den";
 import { denSettingsChangedEvent } from "../../app/lib/den-session-events";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon auth gate, callback, and mode check
+import { isPantheonMode } from "../../app/utils";
+import { PantheonAuthGate } from "../domains/cloud/pantheon-auth-gate";
+import PantheonAuthCallback from "../domains/cloud/pantheon-auth-callback";
+// END-PANTHEON-OVERRIDE
 import { useDenAuth } from "../domains/cloud/den-auth-provider";
 import { ForcedSigninPage } from "../domains/cloud/forced-signin-page";
 import { useDesktopFontZoomBehavior } from "./font-zoom";
@@ -87,13 +92,23 @@ function DenSigninGate({ children }: DenSigninGateProps) {
 export function AppRoot() {
   useDesktopFontZoomBehavior();
 
+  // BEGIN-PANTHEON-OVERRIDE — wrap app in PantheonAuthGate when Pantheon mode is active
+  const pantheon = isPantheonMode();
+  const Gate = pantheon
+    ? ({ children }: { children: ReactNode }) => <PantheonAuthGate>{children}</PantheonAuthGate>
+    : DenSigninGate;
+  // END-PANTHEON-OVERRIDE
+
   return (
     <>
       <DevProfiler id="AppRoot">
         <OpenworkControlProvider>
           <OpenworkRouteControlActions />
-          <DenSigninGate>
+          <Gate>
             <Routes>
+              {/* BEGIN-PANTHEON-OVERRIDE — OIDC callback route */}
+              <Route path="/auth/callback" element={<PantheonAuthCallback />} />
+              {/* END-PANTHEON-OVERRIDE */}
               <Route
                 path="/signin"
                 element={
@@ -163,7 +178,7 @@ export function AppRoot() {
               <Route path="/" element={<Navigate to="/session" replace />} />
               <Route path="*" element={<Navigate to="/session" replace />} />
             </Routes>
-          </DenSigninGate>
+          </Gate>
         </OpenworkControlProvider>
         <LoadingOverlay />
       </DevProfiler>

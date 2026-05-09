@@ -232,7 +232,14 @@ async function startMcpHttpServer(mcpServerFactory, preferredPort = 0) {
   try {
     port = await listen(preferredPort);
   } catch (error) {
-    if (!preferredPort || error?.code !== "EADDRINUSE") throw error;
+    // EADDRINUSE: another process holds the port. EACCES on Windows usually
+    // means the port is in the OS excluded range (`netsh int ipv4 show
+    // excludedportrange protocol=tcp`) — for the hardcoded MCP ports
+    // 64883/64884 this is the common case. Either way, fall back to an
+    // ephemeral port (preferredPort=0) instead of crashing the MCP boot.
+    if (!preferredPort || (error?.code !== "EADDRINUSE" && error?.code !== "EACCES")) {
+      throw error;
+    }
     port = await listen(0);
   }
 

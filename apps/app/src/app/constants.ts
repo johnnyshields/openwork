@@ -8,10 +8,13 @@ export const VARIANT_PREF_KEY = "openwork.modelVariant";
 export const LANGUAGE_PREF_KEY = "openwork.language";
 export const HIDE_TITLEBAR_PREF_KEY = "openwork.hideTitlebar";
 
-export const DEFAULT_MODEL: ModelRef = {
-  providerID: "opencode",
-  modelID: "big-pickle",
-};
+// BEGIN-PANTHEON-OVERRIDE — use Anthropic Claude as default model in Pantheon mode
+import { isPantheonMode } from "./utils";
+
+export const DEFAULT_MODEL: ModelRef = isPantheonMode()
+  ? { providerID: "anthropic", modelID: "claude-4-6-sonnet" }
+  : { providerID: "opencode", modelID: "big-pickle" };
+// END-PANTHEON-OVERRIDE
 
 export const SUGGESTED_PLUGINS: SuggestedPlugin[] = [];
 

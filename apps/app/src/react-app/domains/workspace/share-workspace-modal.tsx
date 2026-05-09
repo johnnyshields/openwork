@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useReducer } from "react";
 import { ArrowLeft, MonitorUp, X } from "lucide-react";
 
 import { t } from "../../../i18n";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon mode helper
+import { isPantheonMode } from "../../../app/utils";
+// END-PANTHEON-OVERRIDE
 import {
   modalHeaderButtonClass,
   modalHeaderClass,
@@ -205,12 +208,16 @@ export function ShareWorkspaceModal(props: ShareWorkspaceModalProps) {
         <div className="flex-1 overflow-y-auto px-6 pb-7 pt-2 scrollbar-hide">
           {activeView === "chooser" ? (
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-3 duration-300">
-              <WorkspaceOptionCard
-                title={t("share.option_access_title")}
-                description={t("share.option_access_desc")}
-                icon={MonitorUp}
-                onClick={() => dispatch({ type: "setActiveView", view: "access" })}
-              />
+              {/* BEGIN-PANTHEON-OVERRIDE — hide remote access option in Pantheon mode */}
+              {isPantheonMode() ? null : (
+                <WorkspaceOptionCard
+                  title={t("share.option_access_title")}
+                  description={t("share.option_access_desc")}
+                  icon={MonitorUp}
+                  onClick={() => dispatch({ type: "setActiveView", view: "access" })}
+                />
+              )}
+              {/* END-PANTHEON-OVERRIDE */}
             </div>
           ) : null}
 

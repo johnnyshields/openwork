@@ -316,6 +316,55 @@ const IDLE_ROUTER_INFO = Object.freeze({
 
 let mainWindow = null;
 const pendingDeepLinks = [];
+
+// Forward main-process stdout/stderr (which includes the embedded
+// openwork-server's log emitter at apps/server/src/server.ts:114-117) to the
+// renderer's DevTools console. Original write still happens, so terminal /
+// redirected-file output is preserved. Lines emitted before the renderer
+// window exists are buffered (cap 1000) and drained on first delivery.
+const mainLogQueue = [];
+let mainLogQueueCap = 1000;
+function sendMainLogToRenderer(stream, line) {
+  const win = mainWindow;
+  if (win && !win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
+    if (mainLogQueue.length > 0) {
+      const drained = mainLogQueue.splice(0, mainLogQueue.length);
+      for (const queued of drained) {
+        try { win.webContents.send("openwork:main-log", queued); } catch { /* ignore */ }
+      }
+    }
+    try { win.webContents.send("openwork:main-log", { stream, line }); } catch { /* ignore */ }
+  } else if (mainLogQueue.length < mainLogQueueCap) {
+    mainLogQueue.push({ stream, line });
+  }
+}
+function installStreamTee(streamName, target) {
+  const originalWrite = target.write.bind(target);
+  let buf = "";
+  target.write = (chunk, encoding, callback) => {
+    let text;
+    if (typeof chunk === "string") {
+      text = chunk;
+    } else if (chunk && typeof chunk === "object" && typeof chunk.toString === "function") {
+      const enc = typeof encoding === "string" ? encoding : "utf8";
+      text = Buffer.isBuffer(chunk) ? chunk.toString(enc) : String(chunk);
+    } else {
+      text = String(chunk);
+    }
+    buf += text;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.length > 0) sendMainLogToRenderer(streamName, line);
+    }
+    return originalWrite(chunk, encoding, callback);
+  };
+}
+installStreamTee("stdout", process.stdout);
+installStreamTee("stderr", process.stderr);
+
+
 let uiControlServer = null;
 let uiControlDiscoveryPath = null;
 const uiControlToken = randomBytes(32).toString("hex");
@@ -2111,6 +2160,95 @@ ipcMain.handle("openwork:browser:state", () => {
   };
 });
 ipcMain.handle("openwork:browser:destroy", () => destroyBrowserView());
+
+// BEGIN-PANTHEON-OVERRIDE — OIDC popup for Pantheon sign-in
+// The renderer cannot open a child BrowserWindow on its own (the main window's
+// `setWindowOpenHandler` punts non-loopback URLs to `shell.openExternal`), and
+// Pantheon's OIDC callback can't `postMessage` back across the file:// origin
+// gap anyway. This handler runs the OIDC popup from the main process: it loads
+// `authUrl` in a fresh BrowserWindow, intercepts navigation to `redirectUri`
+// before the Pantheon /oauth/callback page actually loads, parses the code +
+// state from the URL, closes the popup, and resolves with the result.
+ipcMain.handle("openwork:pantheon:beginAuth", async (event, authUrl, redirectUri) => {
+  if (typeof authUrl !== "string" || !authUrl.trim()) return null;
+  if (typeof redirectUri !== "string" || !redirectUri.trim()) return null;
+
+  const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const popup = new BrowserWindow({
+    width: 500,
+    height: 700,
+    parent,
+    modal: false,
+    title: "Sign in — OpenWork",
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      try {
+        if (!popup.isDestroyed()) popup.destroy();
+      } catch {
+        // ignore
+      }
+      resolve(result);
+    };
+
+    const tryIntercept = (e, url) => {
+      if (typeof url !== "string") return;
+      if (!url.startsWith(redirectUri)) return;
+      try {
+        e?.preventDefault?.();
+      } catch {
+        // ignore
+      }
+      try {
+        const parsed = new URL(url);
+        const code = parsed.searchParams.get("code");
+        const state = parsed.searchParams.get("state");
+        if (code && state) {
+          finish({ code, state });
+          return;
+        }
+      } catch {
+        // fall through to null result
+      }
+      finish(null);
+    };
+
+    popup.webContents.on("will-redirect", (e, url) => tryIntercept(e, url));
+    popup.webContents.on("will-navigate", (e, url) => tryIntercept(e, url));
+    // Belt-and-suspenders: some redirects (especially server-side 302s in
+    // single-page flows) only surface here.
+    popup.webContents.on("did-navigate", (_e, url) => tryIntercept(null, url));
+
+    popup.on("closed", () => finish(null));
+
+    popup.loadURL(authUrl).catch(() => finish(null));
+  });
+});
+
+// Renderer pushes the Pantheon AI-proxy credentials (PANTHEON_API_URL +
+// PANTHEON_API_KEY) here after OIDC sign-in. The runtime manager caches them
+// and includes them in every openwork-server child env it spawns; openwork-server
+// inherits process.env when launching managed opencode, so opencode also sees
+// them. Restart opencode (engineRestart) so a freshly-spawned opencode picks
+// up the new key — the running opencode keeps using whatever env it was spawned
+// with.
+ipcMain.handle("openwork:pantheon:setCredentials", async (_event, payload) => {
+  const apiUrl = typeof payload?.apiUrl === "string" ? payload.apiUrl.trim() : "";
+  const apiKey = typeof payload?.apiKey === "string" ? payload.apiKey.trim() : "";
+  runtimeManager.setPantheonCredentials({ apiUrl, apiKey });
+  return { ok: true, hasCredentials: Boolean(apiUrl && apiKey) };
+});
+// END-PANTHEON-OVERRIDE
 
 registerMigrationIpc({ app, ipcMain });
 const { ensureAutoUpdater } = registerUpdaterIpc({ app, ipcMain, getMainWindow: () => mainWindow });

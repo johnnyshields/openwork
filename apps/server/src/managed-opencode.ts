@@ -52,10 +52,43 @@ export async function createManagedOpencodeServer(options: {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  // Resolve once we see the "listening on …" line. Any stdio data — before
+  // and after — is forwarded to our parent process so it surfaces in the
+  // [ow-server] log stream (and a managed-opencode crash post-startup is
+  // visible instead of silent).
+  let urlResolved = false;
+  // Set when our own close() initiates the shutdown — used to suppress the
+  // "managed opencode exited" stderr line for kills we triggered ourselves
+  // (engineRestart, app shutdown). Unexpected exits (no caller-initiated kill)
+  // still print so a real opencode crash is visible.
+  let closingIntentionally = false;
+  let startupBuffer = "";
+  const STARTUP_BUFFER_CAP = 16_384;
+  child.stdout?.on("data", (chunk) => {
+    process.stdout.write(`[opencode] ${chunk}`);
+    if (!urlResolved && startupBuffer.length < STARTUP_BUFFER_CAP) {
+      startupBuffer = (startupBuffer + chunk.toString()).slice(-STARTUP_BUFFER_CAP);
+    }
+  });
+  child.stderr?.on("data", (chunk) => {
+    process.stderr.write(`[opencode] ${chunk}`);
+    if (!urlResolved && startupBuffer.length < STARTUP_BUFFER_CAP) {
+      startupBuffer = (startupBuffer + chunk.toString()).slice(-STARTUP_BUFFER_CAP);
+    }
+  });
+  child.once("exit", (code, signal) => {
+    if (urlResolved && !closingIntentionally) {
+      process.stderr.write(`[opencode] managed opencode exited code=${code} signal=${signal}\n`);
+    }
+  });
+
   const url = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Timeout waiting for OpenCode server after ${options.timeoutMs ?? 15000}ms`)), options.timeoutMs ?? 15000);
-    let output = "";
+    const timeout = setTimeout(
+      () => reject(new Error(`Timeout waiting for OpenCode server after ${options.timeoutMs ?? 15000}ms`)),
+      options.timeoutMs ?? 15000,
+    );
     const done = (value: string) => {
+      urlResolved = true;
       clearTimeout(timeout);
       resolve(value);
     };
@@ -63,20 +96,21 @@ export async function createManagedOpencodeServer(options: {
       clearTimeout(timeout);
       reject(error);
     };
-    child.stdout?.on("data", (chunk) => {
-      output += chunk.toString();
-      for (const line of output.split("\n")) {
+    const onData = (chunk: Buffer) => {
+      const text = chunk.toString();
+      for (const line of text.split("\n")) {
         if (!line.startsWith("opencode server listening")) continue;
         const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
         if (!match?.[1]) return fail(new Error(`Failed to parse OpenCode server URL from: ${line}`));
         done(match[1]);
+        return;
       }
-    });
-    child.stderr?.on("data", (chunk) => {
-      output += chunk.toString();
-    });
+    };
+    child.stdout?.on("data", onData);
     child.once("error", fail);
-    child.once("exit", (code) => fail(new Error(`OpenCode server exited with code ${code}${output.trim() ? `\n${output}` : ""}`)));
+    child.once("exit", (code) =>
+      fail(new Error(`OpenCode server exited with code ${code}${startupBuffer.trim() ? `\n${startupBuffer}` : ""}`)),
+    );
   });
 
   return {
@@ -85,7 +119,14 @@ export async function createManagedOpencodeServer(options: {
     password,
     pid: child.pid ?? null,
     close() {
-      if (!child.killed) child.kill();
+      closingIntentionally = true;
+      if (!child.killed) {
+        // Debug-level (stdout → DevTools verbose) so the intentional-stop is
+        // visible when a developer is watching engineRestart / shutdown flows
+        // without polluting the error stream.
+        process.stdout.write(`[opencode] stopping managed opencode (pid=${child.pid ?? "?"})\n`);
+        child.kill();
+      }
     },
   };
 }

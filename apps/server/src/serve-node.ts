@@ -57,8 +57,19 @@ function toWebRequest(nodeReq: IncomingMessage, hostname: string, port: number):
 
 /**
  * Write a Web API Response to a Node.js ServerResponse.
+ *
+ * All writes/ends are guarded against `writableEnded` / `destroyed` so a
+ * mid-flight response surviving past `server.closeAllConnections()` (e.g. on
+ * shutdown) doesn't throw ERR_STREAM_WRITE_AFTER_END and crash the host
+ * process — the fetch handler can resolve well after the socket is gone.
  */
+function isResponseDone(nodeRes: ServerResponse): boolean {
+  return nodeRes.writableEnded || nodeRes.destroyed;
+}
+
 async function writeWebResponse(webRes: Response, nodeRes: ServerResponse): Promise<void> {
+  if (isResponseDone(nodeRes)) return;
+
   const headersObj: Record<string, string | string[]> = {};
   webRes.headers.forEach((value, key) => {
     const existing = headersObj[key];
@@ -69,25 +80,50 @@ async function writeWebResponse(webRes: Response, nodeRes: ServerResponse): Prom
     }
   });
 
-  nodeRes.writeHead(webRes.status, headersObj);
+  if (!nodeRes.headersSent) {
+    try {
+      nodeRes.writeHead(webRes.status, headersObj);
+    } catch {
+      return;
+    }
+  }
 
   if (!webRes.body) {
-    nodeRes.end();
+    if (!isResponseDone(nodeRes)) {
+      try { nodeRes.end(); } catch { /* socket gone */ }
+    }
     return;
   }
 
   const reader = webRes.body.getReader();
   try {
     while (true) {
+      if (isResponseDone(nodeRes)) return;
       const { done, value } = await reader.read();
       if (done) break;
-      if (!nodeRes.write(value)) {
-        await new Promise<void>((resolve) => nodeRes.once("drain", resolve));
+      if (isResponseDone(nodeRes)) return;
+      try {
+        if (!nodeRes.write(value)) {
+          await new Promise<void>((resolve) => {
+            const onDrain = () => { cleanup(); resolve(); };
+            const onClose = () => { cleanup(); resolve(); };
+            const cleanup = () => {
+              nodeRes.off("drain", onDrain);
+              nodeRes.off("close", onClose);
+            };
+            nodeRes.once("drain", onDrain);
+            nodeRes.once("close", onClose);
+          });
+        }
+      } catch {
+        return;
       }
     }
   } finally {
     reader.releaseLock();
-    nodeRes.end();
+    if (!isResponseDone(nodeRes)) {
+      try { nodeRes.end(); } catch { /* socket gone */ }
+    }
   }
 }
 
@@ -106,10 +142,17 @@ export function serve(options: ServeOptions): Promise<ServeResult> {
       await writeWebResponse(webRes, nodeRes);
     } catch (error) {
       console.error("[serve-node] Unhandled error:", error);
-      if (!nodeRes.headersSent) {
-        nodeRes.writeHead(500, { "Content-Type": "application/json" });
+      if (isResponseDone(nodeRes)) return;
+      try {
+        if (!nodeRes.headersSent) {
+          nodeRes.writeHead(500, { "Content-Type": "application/json" });
+        }
+        nodeRes.end(JSON.stringify({ error: "internal_error" }));
+      } catch {
+        // Connection was torn down between the fetch error and our write —
+        // there's nothing left to report on. Swallow rather than re-throwing
+        // into the createServer handler (Node would then crash the process).
       }
-      nodeRes.end(JSON.stringify({ error: "internal_error" }));
     }
   });
 

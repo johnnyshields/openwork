@@ -104,6 +104,16 @@ contextBridge.exposeInMainWorld("__OPENWORK_ELECTRON__", {
       return () => ipcRenderer.removeListener("openwork:browser:panel-closed", handler);
     },
   },
+  // BEGIN-PANTHEON-OVERRIDE — expose OIDC popup + credentials IPC to the renderer
+  pantheon: {
+    beginAuth(authUrl, redirectUri) {
+      return ipcRenderer.invoke("openwork:pantheon:beginAuth", authUrl, redirectUri);
+    },
+    setCredentials(apiUrl, apiKey) {
+      return ipcRenderer.invoke("openwork:pantheon:setCredentials", { apiUrl, apiKey });
+    },
+  },
+  // END-PANTHEON-OVERRIDE
   meta: {
     initialDeepLinks: [],
     platform: normalizePlatform(process.platform),
@@ -114,6 +124,36 @@ contextBridge.exposeInMainWorld("__OPENWORK_ELECTRON__", {
 ipcRenderer.on(NATIVE_DEEP_LINK_EVENT, (_event, urls) => {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(NATIVE_DEEP_LINK_EVENT, { detail: urls }));
+});
+
+// Re-emit Electron main-process stdout/stderr into the renderer's DevTools
+// console, prefixed so they're easy to distinguish from renderer-side logs.
+// The embedded openwork-server tags each line with `[ow-server] ` (via
+// OPENWORK_SERVER_LOG_PREFIX in apps/server/src/server.ts) so we can demux
+// it from sibling main-process writers and label it accordingly.
+const OW_SERVER_PREFIX = "[ow-server] ";
+ipcRenderer.on("openwork:main-log", (_event, payload) => {
+  const stream = payload?.stream === "stderr" ? "stderr" : "stdout";
+  const raw = typeof payload?.line === "string" ? payload.line : "";
+  if (!raw) return;
+  let label;
+  let body;
+  if (raw.startsWith(OW_SERVER_PREFIX)) {
+    label = stream === "stderr" ? "[ow-server:err]" : "[ow-server]";
+    body = raw.slice(OW_SERVER_PREFIX.length);
+  } else {
+    label = stream === "stderr" ? "[main:err]" : "[main]";
+    body = raw;
+  }
+  // stderr → console.error (DevTools "Error" level).
+  // stdout → console.debug (DevTools "Verbose" level — hidden by default;
+  // toggle the "Verbose" checkbox in the DevTools console level filter to
+  // see them).
+  if (stream === "stderr") {
+    console.error(label, body);
+  } else {
+    console.debug(label, body);
+  }
 });
 
 if (!applyShellDocumentMarkers() && typeof document !== "undefined") {

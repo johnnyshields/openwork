@@ -27,7 +27,9 @@ import type {
 import { t } from "../../i18n";
 import { unwrap } from "../../app/lib/opencode";
 import type { McpStatusMap, TodoItem } from "../../app/types";
-import { safeStringify } from "../../app/utils";
+// BEGIN-PANTHEON-OVERRIDE — import Pantheon curated provider list fetch
+import { fetchPantheonProviderList, safeStringify } from "../../app/utils";
+// END-PANTHEON-OVERRIDE
 import {
   filterProviderList,
   mapConfigProvidersToList,
@@ -168,7 +170,9 @@ export function GlobalSyncProvider({ children }: GlobalSyncProviderProps) {
     }
     try {
       const result = filterProviderList(
-        unwrap(await globalSDK.client.provider.list()),
+        // BEGIN-PANTHEON-OVERRIDE — use Pantheon curated provider list when available
+        (await fetchPantheonProviderList()) ?? unwrap(await globalSDK.client.provider.list()),
+        // END-PANTHEON-OVERRIDE
         disabledProviders,
       );
       setField("provider", result);
